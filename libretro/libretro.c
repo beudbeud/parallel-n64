@@ -24,6 +24,7 @@
 #include "pi/pi_controller.h"
 #include "si/pif.h"
 #include "libretro_memory.h"
+#include "libretro_core_options.h"
 
 /* Cxd4 RSP */
 #include "../mupen64plus-rsp-cxd4/config.h"
@@ -148,6 +149,46 @@ static bool initializing            = true;
 
 extern int g_vi_refresh_rate;
 
+static char rdp_plugin_last[32] = {0};
+
+uint32_t CoreOptionCategoriesSupported = 0;
+uint32_t CoreOptionUpdateDisplayCbSupported = 0;
+
+uint32_t bilinearMode = 0;
+uint32_t EnableHWLighting = 0;
+uint32_t CorrectTexrectCoords = 0;
+uint32_t EnableInaccurateTextureCoordinates = 0;
+uint32_t enableNativeResTexrects = 0;
+uint32_t enableLegacyBlending = 0;
+uint32_t EnableCopyColorToRDRAM = 0;
+uint32_t EnableCopyDepthToRDRAM = 0;
+uint32_t AspectRatio = 0;
+uint32_t txFilterMode = 0;
+uint32_t txEnhancementMode = 0;
+uint32_t txHiresEnable = 0;
+uint32_t txHiresFullAlphaChannel = 0;
+uint32_t txFilterIgnoreBG = 0;
+uint32_t EnableFXAA = 0;
+uint32_t MultiSampling = 0;
+uint32_t EnableFragmentDepthWrite = 0;
+uint32_t EnableShadersStorage = 0;
+uint32_t EnableTextureCache = 0;
+uint32_t EnableFBEmulation = 0;
+uint32_t EnableLODEmulation = 0;
+uint32_t BackgroundMode = 0; // 0 is bgOnePiece
+uint32_t EnableHiResAltCRC = 0;
+uint32_t EnableTxCacheCompression = 0;
+uint32_t EnableNativeResFactor = 0;
+uint32_t EnableN64DepthCompare = 0;
+uint32_t EnableCopyAuxToRDRAM = 0;
+uint32_t GLideN64IniBehaviour = 0;
+
+uint32_t EnableOverscan = 0;
+uint32_t OverscanTop = 0;
+uint32_t OverscanLeft = 0;
+uint32_t OverscanRight = 0;
+uint32_t OverscanBottom = 0;
+
 /* after the controller's CONTROL* member has been assigned we can update
  * them straight from here... */
 extern struct
@@ -241,9 +282,14 @@ static void core_settings_set_defaults(void)
       if (gfx_var.value && !strcmp(gfx_var.value, "auto"))
          core_settings_autoselect_gfx_plugin();
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
       if (gfx_var.value && !strcmp(gfx_var.value, "gln64") && gl_inited)
          gfx_plugin = GFX_GLN64;
+#endif
+
+#ifdef HAVE_GLIDEN64
+      if (gfx_var.value && !strcmp(gfx_var.value, "gliden64") && gl_inited)
+         gfx_plugin = GFX_GLIDEN64;
 #endif
 
 #ifdef HAVE_RICE
@@ -333,6 +379,95 @@ static void core_settings_autoselect_rsp_plugin(void)
    if (gfx_plugin == GFX_ANGRYLION)
       rsp_plugin = RSP_CXD4;
 #endif
+}
+
+static bool set_variable_visibility(void)
+{
+    // For simplicity we create a prepared var per plugin, maybe create a macro for this?
+    struct retro_core_option_display option_display_gliden64;
+    struct retro_core_option_display option_display_angrylion;
+    struct retro_core_option_display option_display_parallel;
+    struct retro_core_option_display option_display_glide64;
+
+    size_t i;
+    size_t num_options = 0;
+    char **values_buf = NULL;
+    struct retro_variable var;
+    const char *rdp_plugin_current = "__NULL__";
+    bool rdp_plugin_found = false;
+
+    // If option categories are supported but
+    // the option update display callback is not,
+    // then all options should be shown,
+    // i.e. do nothing
+    if (CoreOptionCategoriesSupported && !CoreOptionUpdateDisplayCbSupported)
+        return false;
+
+    // Get current plugin
+    var.key = CORE_NAME "-gfxplugin";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        rdp_plugin_current = var.value;
+        rdp_plugin_found = true;
+    }
+
+    // Check if plugin has changed since last
+    // call of this function
+    if (!strcmp(rdp_plugin_last, rdp_plugin_current))
+        return false;
+
+    strncpy(rdp_plugin_last, rdp_plugin_current, sizeof(rdp_plugin_last));
+
+    // Show/hide options depending on Plugins (Active isn't relevant!)
+    if (rdp_plugin_found)
+    {
+        option_display_gliden64.visible = !strcmp(rdp_plugin_current, "gliden64");
+        option_display_angrylion.visible = !strcmp(rdp_plugin_current, "angrylion");
+        option_display_parallel.visible = !strcmp(rdp_plugin_current, "parallel");
+        option_display_glide64.visible = !strcmp(rdp_plugin_current, "glide64");
+    } else {
+        option_display_gliden64.visible = option_display_angrylion.visible = option_display_parallel.visible = option_display_glide64.visible = true;
+    }
+
+    // Determine number of options
+    for (;;)
+    {
+        if (!option_defs_us[num_options].key)
+            break;
+        num_options++;
+    }
+
+    // Copy parameters from option_defs_us array
+    for (i = 0; i < num_options; i++)
+    {
+        const char *key  = option_defs_us[i].key;
+        const char *hint = option_defs_us[i].info;
+        if (hint)
+        {
+            // Quick and dirty, its the only consistent naming
+            // Otherwise GlideN64 Setting keys will need to be broken again..
+            if (!!strstr(hint, "(GLideN64)"))
+            {
+                option_display_gliden64.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_gliden64);
+            } else if (!!strstr(hint, "(Angrylion)"))
+            {
+                option_display_angrylion.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_angrylion);
+            } else if (!!strstr(key, "(ParaLLEl-RDP)")) // Maybe unify it later?
+            {
+                option_display_parallel.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_glide64);
+            } else if (!!strstr(key, "(Glide64)")) // Maybe unify it later?
+            {
+                option_display_glide64.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_parallel);
+            }
+        }
+    }
+
+    return true;
 }
 
 static void setup_variables(void)
@@ -492,7 +627,17 @@ static void setup_variables(void)
       { 0, 0 }
    };
 
-   environ_cb(RETRO_ENVIRONMENT_SET_VARIABLES, variables);
+    libretro_set_core_options(environ_cb, &categoriesSupported);
+    if (categoriesSupported)
+        CoreOptionCategoriesSupported = 1;
+
+    updateDisplayCb.callback = set_variable_visibility;
+    updateDisplayCbSupported = environ_cb(
+            RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK,
+            &updateDisplayCb);
+    if (updateDisplayCbSupported)
+        CoreOptionUpdateDisplayCbSupported = 1;
+
    environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
    environ_cb(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void*)subsystems);
 }
@@ -732,9 +877,13 @@ void reinit_gfx_plugin(void)
 #endif
           break;
        case GFX_GLN64:
-       // TODO: wtf is this 
-#if defined(HAVE_GLN64)
+#ifdef HAVE_GLN64
           gles2n64_reset();
+#endif
+       case GFX_GLIDEN64:
+       // TODO: wtf is this??? 
+#ifdef HAVE_GLIDEN64
+          /* TODO/FIXME */
 #endif
           break;
        case GFX_RICE:
@@ -768,6 +917,7 @@ void deinit_gfx_plugin(void)
           parallel_deinit();
 #endif
       case GFX_GLN64:
+      case GFX_GLIDEN64:
           glsm_ctl(GLSM_CTL_STATE_CONTEXT_DESTROY, NULL);
           break;
        default:
@@ -1056,6 +1206,9 @@ void retro_deinit(void)
 
    vulkan_inited     = false;
    gl_inited         = false;
+
+   CoreOptionCategoriesSupported = 0;
+   CoreOptionUpdateDisplayCbSupported = 0;
 }
 
 
@@ -1100,7 +1253,11 @@ static void gfx_set_filtering(void)
 #endif
            break;
         case GFX_GLN64:
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
+           /* Stub */
+#endif
+        case GFX_GLIDEN64:
+#ifdef HAVE_GLIDEN64
            /* Stub */
 #endif
            break;
@@ -1138,7 +1295,11 @@ static void gfx_set_dithering(void)
       case GFX_PARALLEL:
          break;
       case GFX_GLN64:
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
+         /* Stub */
+#endif
+      case GFX_GLIDEN64:
+#ifdef HAVE_GLIDEN64
          /* Stub */
 #endif
          break;
@@ -1290,10 +1451,15 @@ void update_variables(bool startup)
       if (var.value)
       {
 #if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64) || defined(HAVE_RICE) || defined(HAVE_GLIDE64) || defined(HAVE_THR_AL) || defined(HAVE_PARALLEL)
+         // TODO: This logic seems wrong?
          if (!strcmp(var.value, "auto"))
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
          if (!strcmp(var.value, "gln64"))
             gfx_plugin = GFX_GLN64;
+#endif
+#ifdef HAVE_GLIDEN64
+         if (!strcmp(var.value, "gliden64"))
+            gfx_plugin = GFX_GLIDEN64;
 #endif
 #ifdef HAVE_RICE
          if (!strcmp(var.value, "rice"))
@@ -1674,7 +1840,289 @@ void update_variables(bool startup)
       }
    }
 
+   var.key = CORE_NAME "-BilinearMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      bilinearMode = !strcmp(var.value, "3point") ? 0 : 1;
+   }
 
+   var.key = CORE_NAME "-FXAA";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableFXAA = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-MultiSampling";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      MultiSampling = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-EnableLODEmulation";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableLODEmulation = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableFBEmulation";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableFBEmulation = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableN64DepthCompare";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Compatible"))
+         EnableN64DepthCompare = 2; // dcCompatible
+      else if (!strcmp(var.value, "True"))
+         EnableN64DepthCompare = 1; // dcFast
+      else
+         EnableN64DepthCompare = 0; // dcDisable
+   }
+
+   var.key = CORE_NAME "-EnableCopyColorToRDRAM";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "TripleBuffer"))
+         EnableCopyColorToRDRAM = 3;
+      else if (!strcmp(var.value, "Async"))
+         EnableCopyColorToRDRAM = 2;
+      else if (!strcmp(var.value, "Sync"))
+         EnableCopyColorToRDRAM = 1;
+      else
+         EnableCopyColorToRDRAM = 0;
+   }
+
+   var.key = CORE_NAME "-EnableCopyDepthToRDRAM";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Software"))
+         EnableCopyDepthToRDRAM = 2;
+      else if (!strcmp(var.value, "FromMem"))
+         EnableCopyDepthToRDRAM = 1;
+      else
+         EnableCopyDepthToRDRAM = 0;
+   }
+
+   var.key = CORE_NAME "-EnableHWLighting";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableHWLighting = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-CorrectTexrectCoords";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Force"))
+         CorrectTexrectCoords = 2;
+      else if (!strcmp(var.value, "Auto"))
+         CorrectTexrectCoords = 1;
+      else
+         CorrectTexrectCoords = 0;
+   }
+
+   var.key = CORE_NAME "-EnableInaccurateTextureCoordinates";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableInaccurateTextureCoordinates = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-BackgroundMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      BackgroundMode = !strcmp(var.value, "OnePiece") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableNativeResTexrects";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if(!strcmp(var.value, "False") || !strcmp(var.value, "Disabled"))
+      {
+         enableNativeResTexrects = 0; // NativeResTexrectsMode::ntDisable
+      }
+      else if(!strcmp(var.value, "Optimized"))
+      {
+         enableNativeResTexrects = 1; // NativeResTexrectsMode::ntOptimized
+      }
+      else if(!strcmp(var.value, "Unoptimized"))
+      {
+         enableNativeResTexrects = 1; // NativeResTexrectsMode::ntUnptimized (Note: upstream typo)
+      }
+   }
+
+   var.key = CORE_NAME "-txFilterMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Smooth filtering 1"))
+         txFilterMode = 1;
+      else if (!strcmp(var.value, "Smooth filtering 2"))
+         txFilterMode = 2;
+      else if (!strcmp(var.value, "Smooth filtering 3"))
+         txFilterMode = 3;
+      else if (!strcmp(var.value, "Smooth filtering 4"))
+         txFilterMode = 4;
+      else if (!strcmp(var.value, "Sharp filtering 1"))
+         txFilterMode = 5;
+      else if (!strcmp(var.value, "Sharp filtering 2"))
+         txFilterMode = 6;
+      else
+         txFilterMode = 0;
+   }
+
+   var.key = CORE_NAME "-txEnhancementMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "As Is"))
+         txEnhancementMode = 1;
+      else if (!strcmp(var.value, "X2"))
+         txEnhancementMode = 2;
+      else if (!strcmp(var.value, "X2SAI"))
+         txEnhancementMode = 3;
+      else if (!strcmp(var.value, "HQ2X"))
+         txEnhancementMode = 4;
+      else if (!strcmp(var.value, "HQ2XS"))
+         txEnhancementMode = 5;
+      else if (!strcmp(var.value, "LQ2X"))
+         txEnhancementMode = 6;
+      else if (!strcmp(var.value, "LQ2XS"))
+         txEnhancementMode = 7;
+      else if (!strcmp(var.value, "HQ4X"))
+         txEnhancementMode = 8;
+      else if (!strcmp(var.value, "2xBRZ"))
+         txEnhancementMode = 9;
+      else if (!strcmp(var.value, "3xBRZ"))
+         txEnhancementMode = 10;
+      else if (!strcmp(var.value, "4xBRZ"))
+         txEnhancementMode = 11;
+      else if (!strcmp(var.value, "5xBRZ"))
+         txEnhancementMode = 12;
+      else if (!strcmp(var.value, "6xBRZ"))
+         txEnhancementMode = 13;
+      else
+         txEnhancementMode = 0;
+   }
+
+   var.key = CORE_NAME "-txFilterIgnoreBG";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      // "Filter background textures; True|False" (true=filter, false=ignore)
+      txFilterIgnoreBG = !strcmp(var.value, "False") ? 1 : 0;
+   }
+
+   var.key = CORE_NAME "-txHiresEnable";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      txHiresEnable = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-txCacheCompression";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableTxCacheCompression = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-txHiresFullAlphaChannel";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      txHiresFullAlphaChannel = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableLegacyBlending";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      enableLegacyBlending = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableFragmentDepthWrite";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableFragmentDepthWrite = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableShadersStorage";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableShadersStorage = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableTextureCache";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableTextureCache = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableHiResAltCRC";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableHiResAltCRC = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-EnableCopyAuxToRDRAM";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableCopyAuxToRDRAM = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-GLideN64IniBehaviour";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "late"))
+         GLideN64IniBehaviour = 0;
+      else if (!strcmp(var.value, "early"))
+         GLideN64IniBehaviour = 1;
+      else if (!strcmp(var.value, "disabled"))
+         GLideN64IniBehaviour = -1;
+   }
+
+   var.key = "parallel-n64-aspectratiohint";
+   var.value = NULL;
+
+   bool stretch = environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value && 0 == strcmp(var.value, "widescreen");
+
+   var.key = CORE_NAME "-viewport-hack";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "enabled")) {
+         AspectRatio = 3; // Aspect::aAdjust
+      } else {
+         AspectRatio = stretch ? 2 : 1; // Aspect::a169 / Aspect::a43
+      }
+   }
+
+   var.key = CORE_NAME "-EnableNativeResFactor";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+   EnableNativeResFactor = atoi(var.value);
+   }
 }
 
 static void format_saved_memory(void)
@@ -1720,6 +2168,7 @@ bool retro_load_game(const struct retro_game_info *game)
       {
          case GFX_GLIDE64:
          case GFX_GLN64:
+         case GFX_GLIDEN64:
          case GFX_RICE:
             gfx_plugin = GFX_PARALLEL;
             break;
@@ -1909,6 +2358,11 @@ void retro_run (void)
                   /* Stub */
 #endif
                   break;
+               case GFX_GLIDEN64:
+#ifdef HAVE_GLIDEN64
+                  /* Stub */
+#endif
+                  break;
                case GFX_PARALLEL:
 #ifdef HAVE_PARALLEL
                   /* Stub */
@@ -1952,6 +2406,7 @@ void retro_run (void)
       {
          case GFX_GLIDE64:
          case GFX_GLN64:
+         case GFX_GLIDEN64:
          case GFX_RICE:
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
             glsm_enter();
@@ -1988,6 +2443,7 @@ void retro_run (void)
       {
          case GFX_GLIDE64:
          case GFX_GLN64:
+         case GFX_GLIDEN64:
          case GFX_RICE:
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
             glsm_exit();
