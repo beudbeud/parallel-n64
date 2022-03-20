@@ -38,6 +38,7 @@
 #include <string.h>
 
 extern int g_rom_size;
+extern uint32_t AllowUnalignedDMA;
 
 enum
 {
@@ -59,6 +60,11 @@ static void dma_pi_read(struct pi_controller *pi)
    uint32_t rom_address;
    const uint8_t* dram;
    uint8_t* rom;
+   
+   if( !AllowUnalignedDMA ) {
+	   pi->regs[PI_CART_ADDR_REG] &= 0xfffffffe;
+	   pi->regs[PI_DRAM_ADDR_REG] &= 0xfffffffe;
+   }
 
    /* XXX: end of domain is wrong ? */
    if (pi->regs[PI_CART_ADDR_REG] >= 0x05000000 && pi->regs[PI_CART_ADDR_REG] < 0x06000000)
@@ -131,6 +137,11 @@ static void dma_pi_write(struct pi_controller *pi)
    uint32_t rom_address;
    uint8_t* dram;
    const uint8_t* rom;
+   
+   if( !AllowUnalignedDMA ) {
+	   pi->regs[PI_CART_ADDR_REG] &= 0xfffffffe;
+	   pi->regs[PI_DRAM_ADDR_REG] &= 0xfffffffe;
+   }
 
    if (pi->regs[PI_CART_ADDR_REG] < 0x10000000 && !(pi->regs[PI_CART_ADDR_REG] >= 0x06000000 && pi->regs[PI_CART_ADDR_REG] < 0x08000000))
    {
