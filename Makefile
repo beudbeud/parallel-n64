@@ -888,8 +888,6 @@ ifeq ($(DEBUG), 1)
 
       LDFLAGS += -DEBUG
    else
-	  LDFLAGS += -fsanitize=address
-      CFLAGS += -fsanitize=address
       CPUOPTS += -O0 -g
    endif
 else
