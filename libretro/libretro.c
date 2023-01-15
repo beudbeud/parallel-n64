@@ -798,7 +798,7 @@ load_fail:
    cart_data = NULL;
    free(disk_data);
    disk_data = NULL;
-   stop = 1;
+   mupencorestop = 1;
 
    return false;
 }
@@ -1134,7 +1134,7 @@ static bool retro_init_vulkan(void)
 
 static bool context_framebuffer_lock(void *data)
 {
-   if (!stop)
+   if (!mupencorestop)
       return false;
    return true;
 }
@@ -2252,6 +2252,10 @@ static void format_saved_memory(void)
 
 bool retro_load_game(const struct retro_game_info *game)
 {
+#if defined(__APPLE__) && defined(__arm64__)
+   extern void new_dynarec_create_mapping();
+   new_dynarec_create_mapping();
+#endif
    format_saved_memory();
 
    update_variables(true);
@@ -2330,7 +2334,7 @@ bool retro_load_game(const struct retro_game_info *game)
       memcpy(disk_data, game->data, game->size);
    }
 
-   stop      = false;
+   mupencorestop      = false;
    /* Finish ROM load before doing anything funny,
     * so we can return failure if needed. */
 #ifdef NO_LIBCO
@@ -2339,7 +2343,7 @@ bool retro_load_game(const struct retro_game_info *game)
    co_switch(game_thread);
 #endif
 
-   if (stop)
+   if (mupencorestop)
       return false;
 
    first_context_reset = true;
@@ -2366,7 +2370,7 @@ bool retro_load_game_special(unsigned game_type, const struct retro_game_info *i
 
 void retro_unload_game(void)
 {
-    stop = 1;
+    mupencorestop = 1;
     first_time = 1;
 
 #ifdef NO_LIBCO
@@ -2383,7 +2387,7 @@ void retro_unload_game(void)
 static void glsm_exit(void)
 {
 #ifndef HAVE_SHARED_CONTEXT
-   if (stop)
+   if (mupencorestop)
       return;
 #ifdef HAVE_THR_AL
    if (gfx_plugin == GFX_ANGRYLION)
@@ -2400,7 +2404,7 @@ static void glsm_exit(void)
 static void glsm_enter(void)
 {
 #ifndef HAVE_SHARED_CONTEXT
-   if (stop)
+   if (mupencorestop)
       return;
 #ifdef HAVE_THR_AL
    if (gfx_plugin == GFX_ANGRYLION)
@@ -2753,7 +2757,7 @@ int retro_stop_stepping(void)
 
 int retro_return(bool just_flipping)
 {
-   if (stop)
+   if (mupencorestop)
       return 0;
 
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
