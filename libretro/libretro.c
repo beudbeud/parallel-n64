@@ -198,6 +198,7 @@ uint32_t OverrideSaveType = 0;
 uint32_t ParallelRemoveBorders = 0;
 uint32_t IsvEmulationMode = 0;
 uint32_t SdCardEmulationEnabled = 0;
+uint32_t RollbackRtcOnLoadState = 0;
 
 /* after the controller's CONTROL* member has been assigned we can update
  * them straight from here... */
@@ -1017,7 +1018,7 @@ void retro_set_environment(retro_environment_t cb)
 void retro_get_system_info(struct retro_system_info *info)
 {
    info->library_name = "ParaLLEl N64";
-   info->library_version = "2.10.0 (Parallel Launcher Edition)";
+   info->library_version = "2.11.0 (Parallel Launcher Edition)";
    info->valid_extensions = "n64|v64|z64|bin|u1|ndd";
    info->need_fullpath = false;
    info->block_extract = false;
@@ -2258,6 +2259,14 @@ void update_variables(bool startup)
          SdCardEmulationEnabled = 1;
       }
    }
+   
+   var.key = CORE_NAME "-rtc-savestate";
+   var.value = NULL;
+   if( environ_cb( RETRO_ENVIRONMENT_GET_VARIABLE, &var ) && var.value ) {
+      if( !strcmp(var.value, "enabled") ) {
+         RollbackRtcOnLoadState = 1;
+      }
+   }
 }
 
 static void format_saved_memory(void)
@@ -2624,7 +2633,7 @@ size_t retro_get_memory_size(unsigned type)
 
 size_t retro_serialize_size (void)
 {
-    return 16788288 + 1024; /* < 16MB and some change... ouch */
+    return 16788348 + 1024; /* < 16MB and some change... ouch */
 }
 
 bool retro_serialize(void *data, size_t size)
