@@ -23,7 +23,10 @@
 #include "dd/dd_disk.h"
 #include "pi/pi_controller.h"
 #include "si/pif.h"
+#include "util/version.h"
 #include "libretro_memory.h"
+#include "libretro_core_options.h"
+#include "ext/libpl.h"
 
 /* Cxd4 RSP */
 #include "../mupen64plus-rsp-cxd4/config.h"
@@ -33,6 +36,8 @@
 #ifdef HAVE_THR_AL
 #include "../mupen64plus-video-angrylion/vdac.h"
 #endif
+
+#include <glsm/glsmsym.h>
 
 #ifndef PRESCALE_WIDTH
 #define PRESCALE_WIDTH  640
@@ -133,6 +138,7 @@ static enum rsp_plugin_type
                  rsp_plugin;
 uint32_t screen_width               = 640;
 uint32_t screen_height              = 480;
+float    screen_aspect_ratio        = 4.0 / 3.0;
 uint32_t screen_pitch               = 0;
 uint32_t screen_aspectmodehint;
 uint32_t send_allist_to_hle_rsp     = 0;
@@ -146,6 +152,56 @@ static bool initializing            = true;
 
 extern int g_vi_refresh_rate;
 
+static char rdp_plugin_last[32] = {0};
+
+uint32_t CoreOptionCategoriesSupported = 0;
+uint32_t CoreOptionUpdateDisplayCbSupported = 0;
+
+uint32_t bilinearMode = 0;
+uint32_t EnableHWLighting = 0;
+uint32_t CorrectTexrectCoords = 0;
+uint32_t EnableInaccurateTextureCoordinates = 0;
+uint32_t enableNativeResTexrects = 0;
+uint32_t enableLegacyBlending = 0;
+uint32_t EnableCopyColorToRDRAM = 0;
+uint32_t EnableCopyDepthToRDRAM = 0;
+uint32_t AspectRatio = 0;
+uint32_t txFilterMode = 0;
+uint32_t txEnhancementMode = 0;
+uint32_t txHiresEnable = 0;
+uint32_t txHiresFullAlphaChannel = 0;
+uint32_t txFilterIgnoreBG = 0;
+uint32_t EnableFXAA = 0;
+uint32_t MultiSampling = 0;
+uint32_t EnableFragmentDepthWrite = 0;
+uint32_t EnableShadersStorage = 0;
+uint32_t EnableTextureCache = 0;
+uint32_t EnableFBEmulation = 0;
+uint32_t EnableLODEmulation = 0;
+uint32_t BackgroundMode = 0; // 0 is bgOnePiece
+uint32_t EnableHiResAltCRC = 0;
+uint32_t EnableTxCacheCompression = 0;
+uint32_t EnableNativeResFactor = 0;
+uint32_t EnableN64DepthCompare = 0;
+uint32_t EnableCopyAuxToRDRAM = 0;
+uint32_t GLideN64IniBehaviour = 0;
+
+uint32_t EnableOverscan = 0;
+uint32_t OverscanTop = 0;
+uint32_t OverscanLeft = 0;
+uint32_t OverscanRight = 0;
+uint32_t OverscanBottom = 0;
+
+uint32_t AllowUnalignedDMA = 1;
+uint32_t AllowLargeRoms = 1;
+uint32_t LegacySm64ToolsHacks = 0;
+uint32_t RemoveFBBlackBars = 0;
+uint32_t OverrideSaveType = 0;
+uint32_t ParallelRemoveBorders = 0;
+uint32_t IsvEmulationMode = 0;
+uint32_t SdCardEmulationEnabled = 0;
+uint32_t RollbackRtcOnLoadState = 0;
+
 /* after the controller's CONTROL* member has been assigned we can update
  * them straight from here... */
 extern struct
@@ -157,7 +213,7 @@ extern struct
 /* ...but it won't be at least the first time we're called, in that case set
  * these instead for input_plugin to read. */
 int pad_pak_types[4];
-int pad_present[4] = {1, 1, 1, 1};
+int pad_present[4] = {CONT_JOYPAD, CONT_JOYPAD, CONT_JOYPAD, CONT_JOYPAD};
 
 static void n64DebugCallback(void* aContext, int aLevel, const char* aMessage)
 {
@@ -239,9 +295,14 @@ static void core_settings_set_defaults(void)
       if (gfx_var.value && !strcmp(gfx_var.value, "auto"))
          core_settings_autoselect_gfx_plugin();
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
       if (gfx_var.value && !strcmp(gfx_var.value, "gln64") && gl_inited)
          gfx_plugin = GFX_GLN64;
+#endif
+
+#ifdef HAVE_GLIDEN64
+      if (gfx_var.value && !strcmp(gfx_var.value, "gliden64") && gl_inited)
+         gfx_plugin = GFX_GLIDEN64;
 #endif
 
 #ifdef HAVE_RICE
@@ -331,6 +392,95 @@ static void core_settings_autoselect_rsp_plugin(void)
    if (gfx_plugin == GFX_ANGRYLION)
       rsp_plugin = RSP_CXD4;
 #endif
+}
+
+static bool set_variable_visibility(void)
+{
+    // For simplicity we create a prepared var per plugin, maybe create a macro for this?
+    struct retro_core_option_display option_display_gliden64;
+    struct retro_core_option_display option_display_angrylion;
+    struct retro_core_option_display option_display_parallel;
+    struct retro_core_option_display option_display_glide64;
+
+    size_t i;
+    size_t num_options = 0;
+    char **values_buf = NULL;
+    struct retro_variable var;
+    const char *rdp_plugin_current = "__NULL__";
+    bool rdp_plugin_found = false;
+
+    // If option categories are supported but
+    // the option update display callback is not,
+    // then all options should be shown,
+    // i.e. do nothing
+    if (CoreOptionCategoriesSupported && !CoreOptionUpdateDisplayCbSupported)
+        return false;
+
+    // Get current plugin
+    var.key = CORE_NAME "-gfxplugin";
+    var.value = NULL;
+    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+    {
+        rdp_plugin_current = var.value;
+        rdp_plugin_found = true;
+    }
+
+    // Check if plugin has changed since last
+    // call of this function
+    if (!strcmp(rdp_plugin_last, rdp_plugin_current))
+        return false;
+
+    strncpy(rdp_plugin_last, rdp_plugin_current, sizeof(rdp_plugin_last));
+
+    // Show/hide options depending on Plugins (Active isn't relevant!)
+    if (rdp_plugin_found)
+    {
+        option_display_gliden64.visible = !strcmp(rdp_plugin_current, "gliden64");
+        option_display_angrylion.visible = !strcmp(rdp_plugin_current, "angrylion");
+        option_display_parallel.visible = !strcmp(rdp_plugin_current, "parallel");
+        option_display_glide64.visible = !strcmp(rdp_plugin_current, "glide64");
+    } else {
+        option_display_gliden64.visible = option_display_angrylion.visible = option_display_parallel.visible = option_display_glide64.visible = true;
+    }
+
+    // Determine number of options
+    for (;;)
+    {
+        if (!option_defs_us[num_options].key)
+            break;
+        num_options++;
+    }
+
+    // Copy parameters from option_defs_us array
+    for (i = 0; i < num_options; i++)
+    {
+        const char *key  = option_defs_us[i].key;
+        const char *hint = option_defs_us[i].info;
+        if (hint)
+        {
+            // Quick and dirty, its the only consistent naming
+            // Otherwise GlideN64 Setting keys will need to be broken again..
+            if (!!strstr(hint, "(GLideN64)"))
+            {
+                option_display_gliden64.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_gliden64);
+            } else if (!!strstr(hint, "(Angrylion)"))
+            {
+                option_display_angrylion.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_angrylion);
+            } else if (!!strstr(key, "(ParaLLEl-RDP)")) // Maybe unify it later?
+            {
+                option_display_parallel.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_glide64);
+            } else if (!!strstr(key, "(Glide64)")) // Maybe unify it later?
+            {
+                option_display_glide64.key = key;
+                environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display_parallel);
+            }
+        }
+    }
+
+    return true;
 }
 
 static void setup_variables(void)
@@ -480,17 +630,28 @@ static void setup_variables(void)
       { "Controller", RETRO_DEVICE_JOYPAD },
       { "Mouse", RETRO_DEVICE_MOUSE },
       { "RetroPad", RETRO_DEVICE_JOYPAD },
+      { "Analog", RETRO_DEVICE_ANALOG },
    };
 
    static const struct retro_controller_info ports[] = {
-      { port, 3 },
-      { port, 3 },
-      { port, 3 },
-      { port, 3 },
+      { port, 4 },
+      { port, 4 },
+      { port, 4 },
+      { port, 4 },
       { 0, 0 }
    };
 
-   environ_cb(RETRO_ENVIRONMENT_SET_VARIABLES, variables);
+    libretro_set_core_options(environ_cb, &categoriesSupported);
+    if (categoriesSupported)
+        CoreOptionCategoriesSupported = 1;
+
+    updateDisplayCb.callback = set_variable_visibility;
+    updateDisplayCbSupported = environ_cb(
+            RETRO_ENVIRONMENT_SET_CORE_OPTIONS_UPDATE_DISPLAY_CALLBACK,
+            &updateDisplayCb);
+    if (updateDisplayCbSupported)
+        CoreOptionUpdateDisplayCbSupported = 1;
+
    environ_cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
    environ_cb(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void*)subsystems);
 }
@@ -642,7 +803,7 @@ load_fail:
    cart_data = NULL;
    free(disk_data);
    disk_data = NULL;
-   stop = 1;
+   mupencorestop = 1;
 
    return false;
 }
@@ -712,6 +873,8 @@ static void emu_step_initialize(void)
    CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
 }
 
+extern void gliden64RomOpen();
+extern void gliden64RomClosed();
 void reinit_gfx_plugin(void)
 {
     if(first_context_reset)
@@ -730,8 +893,14 @@ void reinit_gfx_plugin(void)
 #endif
           break;
        case GFX_GLN64:
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
           gles2n64_reset();
+#endif
+          break;
+       case GFX_GLIDEN64:
+#ifdef HAVE_GLIDEN64
+          gliden64RomClosed();
+          gliden64RomOpen();
 #endif
           break;
        case GFX_RICE:
@@ -764,6 +933,9 @@ void deinit_gfx_plugin(void)
 #if defined(HAVE_PARALLEL)
           parallel_deinit();
 #endif
+      case GFX_GLN64:
+      case GFX_GLIDEN64:
+          glsm_ctl(GLSM_CTL_STATE_CONTEXT_DESTROY, NULL);
           break;
        default:
           break;
@@ -848,10 +1020,7 @@ void retro_set_environment(retro_environment_t cb)
 void retro_get_system_info(struct retro_system_info *info)
 {
    info->library_name = "ParaLLEl N64";
-#ifndef GIT_VERSION
-#define GIT_VERSION ""
-#endif
-   info->library_version = "2.0-rc2" GIT_VERSION;
+   info->library_version = CORE_VERSION_STRING " (Parallel Launcher Edition)";
    info->valid_extensions = "n64|v64|z64|bin|u1|ndd";
    info->need_fullpath = false;
    info->block_extract = false;
@@ -891,7 +1060,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    info->geometry.base_height  = screen_height;
    info->geometry.max_width    = screen_width;
    info->geometry.max_height   = screen_height;
-   info->geometry.aspect_ratio = 4.0 / 3.0;
+   info->geometry.aspect_ratio = screen_aspect_ratio;
    info->timing.fps = (region == SYSTEM_PAL) ? 50.0 : (60.13);                /* TODO: Actual timing  */
    info->timing.sample_rate = 44100.0;
 }
@@ -970,12 +1139,12 @@ static bool retro_init_vulkan(void)
 
 static bool context_framebuffer_lock(void *data)
 {
-   if (!stop)
+   if (!mupencorestop)
       return false;
    return true;
 }
 
-static bool retro_init_gl(void)
+static bool retro_init_gl(bool core)
 {
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
    glsm_ctx_params_t params     = {0};
@@ -984,6 +1153,23 @@ static bool retro_init_gl(void)
    params.context_destroy       = context_destroy;
    params.environ_cb            = environ_cb;
    params.stencil               = false;
+   // Requesting core for Windows breaks fullscreen
+#if !defined(HAVE_OPENGLES) && !defined(OS_WINDOWS)
+   if (core)
+   {
+      params.core               = core;
+      if (EnableFBEmulation)
+      {
+         params.major = 4;
+         params.minor = 3;
+      }
+      else
+      {
+         params.major = 3;
+         params.minor = 3;
+      }
+   }
+#endif
 
    params.framebuffer_lock      = context_framebuffer_lock;
 
@@ -1051,6 +1237,9 @@ void retro_deinit(void)
 
    vulkan_inited     = false;
    gl_inited         = false;
+
+   CoreOptionCategoriesSupported = 0;
+   CoreOptionUpdateDisplayCbSupported = 0;
 }
 
 
@@ -1095,7 +1284,11 @@ static void gfx_set_filtering(void)
 #endif
            break;
         case GFX_GLN64:
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
+           /* Stub */
+#endif
+        case GFX_GLIDEN64:
+#ifdef HAVE_GLIDEN64
            /* Stub */
 #endif
            break;
@@ -1133,7 +1326,11 @@ static void gfx_set_dithering(void)
       case GFX_PARALLEL:
          break;
       case GFX_GLN64:
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
+         /* Stub */
+#endif
+      case GFX_GLIDEN64:
+#ifdef HAVE_GLIDEN64
          /* Stub */
 #endif
          break;
@@ -1158,6 +1355,13 @@ void update_variables(bool startup)
 	   parallel_set_overscan_crop(strtol(var.value, NULL, 0));
    else
 	   parallel_set_overscan_crop(0);
+   
+   var.key = "parallel-n64-remove-vi-borders";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      ParallelRemoveBorders = !strcmp(var.value, "enabled");
+   else
+      ParallelRemoveBorders = 0;
 
    var.key = "parallel-n64-parallel-rdp-divot-filter";
    var.value = NULL;
@@ -1285,10 +1489,15 @@ void update_variables(bool startup)
       if (var.value)
       {
 #if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64) || defined(HAVE_RICE) || defined(HAVE_GLIDE64) || defined(HAVE_THR_AL) || defined(HAVE_PARALLEL)
+         // TODO: This logic seems wrong?
          if (!strcmp(var.value, "auto"))
-#if defined(HAVE_GLN64) || defined(HAVE_GLIDEN64)
+#ifdef HAVE_GLN64
          if (!strcmp(var.value, "gln64"))
             gfx_plugin = GFX_GLN64;
+#endif
+#ifdef HAVE_GLIDEN64
+         if (!strcmp(var.value, "gliden64"))
+            gfx_plugin = GFX_GLIDEN64;
 #endif
 #ifdef HAVE_RICE
          if (!strcmp(var.value, "rice"))
@@ -1668,8 +1877,398 @@ void update_variables(bool startup)
             pad_pak_types[3] = p4_pak;
       }
    }
+   
+   var.key = CORE_NAME "-allow-unaligned-dma";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      AllowUnalignedDMA = !strcmp(var.value, "False") ? 0 : 1;
+   }
 
+   var.key = CORE_NAME "-allow-large-roms";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      AllowLargeRoms = !strcmp(var.value, "False") ? 0 : 1;
+   }
 
+   var.key = CORE_NAME "-gliden64-BilinearMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      bilinearMode = !strcmp(var.value, "3point") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-FXAA";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableFXAA = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-gliden64-MultiSampling";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      MultiSampling = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableLODEmulation";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableLODEmulation = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableFBEmulation";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableFBEmulation = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableN64DepthCompare";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Compatible"))
+         EnableN64DepthCompare = 1; // dcCompatible
+      else if (!strcmp(var.value, "True"))
+         EnableN64DepthCompare = 1; // dcFast
+      else
+         EnableN64DepthCompare = 0; // dcDisable
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableCopyColorToRDRAM";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "TripleBuffer"))
+         EnableCopyColorToRDRAM = 3;
+      else if (!strcmp(var.value, "Async"))
+         EnableCopyColorToRDRAM = 2;
+      else if (!strcmp(var.value, "Sync"))
+         EnableCopyColorToRDRAM = 1;
+      else
+         EnableCopyColorToRDRAM = 0;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableCopyDepthToRDRAM";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Software"))
+         EnableCopyDepthToRDRAM = 2;
+      else if (!strcmp(var.value, "FromMem"))
+         EnableCopyDepthToRDRAM = 1;
+      else
+         EnableCopyDepthToRDRAM = 0;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableHWLighting";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableHWLighting = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-CorrectTexrectCoords";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Force"))
+         CorrectTexrectCoords = 2;
+      else if (!strcmp(var.value, "Auto"))
+         CorrectTexrectCoords = 1;
+      else
+         CorrectTexrectCoords = 0;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableInaccurateTextureCoordinates";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableInaccurateTextureCoordinates = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-BackgroundMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      BackgroundMode = !strcmp(var.value, "OnePiece") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableNativeResTexrects";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if(!strcmp(var.value, "False") || !strcmp(var.value, "Disabled"))
+      {
+         enableNativeResTexrects = 0; // NativeResTexrectsMode::ntDisable
+      }
+      else if(!strcmp(var.value, "Optimized"))
+      {
+         enableNativeResTexrects = 1; // NativeResTexrectsMode::ntOptimized
+      }
+      else if(!strcmp(var.value, "Unoptimized"))
+      {
+         enableNativeResTexrects = 1; // NativeResTexrectsMode::ntUnptimized (Note: upstream typo)
+      }
+   }
+
+   var.key = CORE_NAME "-gliden64-txFilterMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "Smooth filtering 1"))
+         txFilterMode = 1;
+      else if (!strcmp(var.value, "Smooth filtering 2"))
+         txFilterMode = 2;
+      else if (!strcmp(var.value, "Smooth filtering 3"))
+         txFilterMode = 3;
+      else if (!strcmp(var.value, "Smooth filtering 4"))
+         txFilterMode = 4;
+      else if (!strcmp(var.value, "Sharp filtering 1"))
+         txFilterMode = 5;
+      else if (!strcmp(var.value, "Sharp filtering 2"))
+         txFilterMode = 6;
+      else
+         txFilterMode = 0;
+   }
+
+   var.key = CORE_NAME "-gliden64-txEnhancementMode";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "As Is"))
+         txEnhancementMode = 1;
+      else if (!strcmp(var.value, "X2"))
+         txEnhancementMode = 2;
+      else if (!strcmp(var.value, "X2SAI"))
+         txEnhancementMode = 3;
+      else if (!strcmp(var.value, "HQ2X"))
+         txEnhancementMode = 4;
+      else if (!strcmp(var.value, "HQ2XS"))
+         txEnhancementMode = 5;
+      else if (!strcmp(var.value, "LQ2X"))
+         txEnhancementMode = 6;
+      else if (!strcmp(var.value, "LQ2XS"))
+         txEnhancementMode = 7;
+      else if (!strcmp(var.value, "HQ4X"))
+         txEnhancementMode = 8;
+      else if (!strcmp(var.value, "2xBRZ"))
+         txEnhancementMode = 9;
+      else if (!strcmp(var.value, "3xBRZ"))
+         txEnhancementMode = 10;
+      else if (!strcmp(var.value, "4xBRZ"))
+         txEnhancementMode = 11;
+      else if (!strcmp(var.value, "5xBRZ"))
+         txEnhancementMode = 12;
+      else if (!strcmp(var.value, "6xBRZ"))
+         txEnhancementMode = 13;
+      else
+         txEnhancementMode = 0;
+   }
+
+   var.key = CORE_NAME "-gliden64-txFilterIgnoreBG";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      // "Filter background textures; True|False" (true=filter, false=ignore)
+      txFilterIgnoreBG = !strcmp(var.value, "False") ? 1 : 0;
+   }
+
+   var.key = CORE_NAME "-gliden64-txHiresEnable";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      txHiresEnable = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-txCacheCompression";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableTxCacheCompression = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-txHiresFullAlphaChannel";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      txHiresFullAlphaChannel = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableLegacyBlending";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      enableLegacyBlending = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableFragmentDepthWrite";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableFragmentDepthWrite = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-gliden64-EnableShadersStorage";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableShadersStorage = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableTextureCache";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableTextureCache = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableHiResAltCRC";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableHiResAltCRC = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableCopyAuxToRDRAM";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableCopyAuxToRDRAM = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-GLideN64IniBehaviour";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if (!strcmp(var.value, "late"))
+         GLideN64IniBehaviour = 0;
+      else if (!strcmp(var.value, "early"))
+         GLideN64IniBehaviour = 1;
+      else if (!strcmp(var.value, "disabled"))
+         GLideN64IniBehaviour = -1;
+   }
+
+   var.key = "parallel-n64-aspectratiohint";
+   var.value = NULL;
+
+   bool stretch = environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value && 0 == strcmp(var.value, "widescreen");
+
+   if (gfx_plugin == GFX_GLIDEN64)
+   {
+      var.key = CORE_NAME "-gliden64-viewport-hack";
+      var.value = NULL;
+      if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      {
+         if (!strcmp(var.value, "enabled")) {
+            screen_aspect_ratio = 16.0 / 9.0;
+            screen_width = screen_height * screen_aspect_ratio;
+            AspectRatio = 3; // Aspect::aAdjust
+         }
+         else if (!strcmp(var.value, "steamdeck")) {
+            screen_aspect_ratio = 16.0 / 10.0;
+            screen_width = screen_height * screen_aspect_ratio;
+            AspectRatio = 3; // Aspect::aAdjust
+         }
+         else if (stretch)
+         {
+            screen_aspect_ratio = 16.0 / 9.0;
+            screen_width = screen_height * screen_aspect_ratio;
+            AspectRatio = 2; // Aspect::a169
+         }
+         else
+         {
+            screen_aspect_ratio = 4.0 / 3.0;
+            AspectRatio = 1; // Aspect::a43
+         }
+      }
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableNativeResFactor";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableNativeResFactor = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-gliden64-LegacySm64ToolsHacks";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      LegacySm64ToolsHacks = !strcmp(var.value, "enabled");
+   }
+   else
+   {
+      LegacySm64ToolsHacks = 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-RemoveFBBlackBars";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      RemoveFBBlackBars = !strcmp(var.value, "enabled");
+   }
+   else
+   {
+      RemoveFBBlackBars = 1;
+   }
+   
+   var.key = CORE_NAME "-OverrideSaveType";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      if( !strcmp(var.value, "EEPROM_4KB") ) {
+         OverrideSaveType = 1;
+      } else if( !strcmp(var.value, "EEPROM_16KB") ) {
+         OverrideSaveType = 2;
+      } else if( !strcmp(var.value, "SRAM") ) {
+         OverrideSaveType = 3;
+      } else if( !strcmp(var.value, "FLASH_RAM") ) {
+         OverrideSaveType = 4;
+      } else if( !strcmp(var.value, "CONTROLLER_PACK") ) {
+         OverrideSaveType = 5;
+      } else if( !strcmp(var.value, "NONE") ) {
+         OverrideSaveType = 6;
+      } else {
+         OverrideSaveType = 0;
+      }
+   }
+   else
+   {
+      OverrideSaveType = 5;
+   }
+   
+   var.key = CORE_NAME "-ISViewer";
+   var.value = NULL;
+   if( environ_cb( RETRO_ENVIRONMENT_GET_VARIABLE, &var ) && var.value ) {
+      if( !strcmp(var.value, "silent") ) {
+         IsvEmulationMode = 1;
+      } else if( !strcmp(var.value, "stdout") ) {
+         IsvEmulationMode = 2;
+      } else if( !strcmp(var.value, "parallel") ) {
+         IsvEmulationMode = 3;
+      }
+   }
+   
+   var.key = CORE_NAME "-sdcard";
+   var.value = NULL;
+   if( environ_cb( RETRO_ENVIRONMENT_GET_VARIABLE, &var ) && var.value ) {
+      if( !strcmp(var.value, "SummerCart64") ) {
+         SdCardEmulationEnabled = 1;
+      }
+   }
+   
+   var.key = CORE_NAME "-rtc-savestate";
+   var.value = NULL;
+   if( environ_cb( RETRO_ENVIRONMENT_GET_VARIABLE, &var ) && var.value ) {
+      if( !strcmp(var.value, "enabled") ) {
+         RollbackRtcOnLoadState = 1;
+      }
+   }
 }
 
 static void format_saved_memory(void)
@@ -1699,29 +2298,24 @@ bool retro_load_game(const struct retro_game_info *game)
    {
       if (gfx_plugin == GFX_PARALLEL)
       {
-         retro_init_vulkan();
-         vulkan_inited = true;
+         vulkan_inited = retro_init_vulkan();
       }
       else
       {
-         retro_init_gl();
+         vulkan_inited = false;
+      }
+
+      if (!vulkan_inited)
+      {
+         retro_init_gl(/*core*/ (gfx_plugin == GFX_GLIDEN64)
+                             || (gfx_plugin == GFX_PARALLEL));
          gl_inited = true;
       }
    }
 
    if (vulkan_inited)
    {
-      switch (gfx_plugin)
-      {
-         case GFX_GLIDE64:
-         case GFX_GLN64:
-         case GFX_RICE:
-            gfx_plugin = GFX_PARALLEL;
-            break;
-         default:
-            break;
-      }
-
+      // success condition - vulkan inited which means we are parallel
       switch (rsp_plugin)
       {
          case RSP_HLE:
@@ -1737,10 +2331,11 @@ bool retro_load_game(const struct retro_game_info *game)
    }
    else if (gl_inited)
    {
+      // we are not vulkan, defer to opengl - it is assumed it always exists, otherwise fail
       switch (gfx_plugin)
       {
          case GFX_PARALLEL:
-            gfx_plugin = GFX_GLIDE64;
+            gfx_plugin = GFX_GLIDEN64;
             break;
          default:
             break;
@@ -1768,7 +2363,7 @@ bool retro_load_game(const struct retro_game_info *game)
       memcpy(disk_data, game->data, game->size);
    }
 
-   stop      = false;
+   mupencorestop      = false;
    /* Finish ROM load before doing anything funny,
     * so we can return failure if needed. */
 #ifdef NO_LIBCO
@@ -1777,7 +2372,7 @@ bool retro_load_game(const struct retro_game_info *game)
    co_switch(game_thread);
 #endif
 
-   if (stop)
+   if (mupencorestop)
       return false;
 
    first_context_reset = true;
@@ -1804,7 +2399,7 @@ bool retro_load_game_special(unsigned game_type, const struct retro_game_info *i
 
 void retro_unload_game(void)
 {
-    stop = 1;
+    mupencorestop = 1;
     first_time = 1;
 
 #ifdef NO_LIBCO
@@ -1821,7 +2416,7 @@ void retro_unload_game(void)
 static void glsm_exit(void)
 {
 #ifndef HAVE_SHARED_CONTEXT
-   if (stop)
+   if (mupencorestop)
       return;
 #ifdef HAVE_THR_AL
    if (gfx_plugin == GFX_ANGRYLION)
@@ -1838,7 +2433,7 @@ static void glsm_exit(void)
 static void glsm_enter(void)
 {
 #ifndef HAVE_SHARED_CONTEXT
-   if (stop)
+   if (mupencorestop)
       return;
 #ifdef HAVE_THR_AL
    if (gfx_plugin == GFX_ANGRYLION)
@@ -1904,6 +2499,11 @@ void retro_run (void)
                   /* Stub */
 #endif
                   break;
+               case GFX_GLIDEN64:
+#ifdef HAVE_GLIDEN64
+                  /* Stub */
+#endif
+                  break;
                case GFX_PARALLEL:
 #ifdef HAVE_PARALLEL
                   /* Stub */
@@ -1947,6 +2547,7 @@ void retro_run (void)
       {
          case GFX_GLIDE64:
          case GFX_GLN64:
+         case GFX_GLIDEN64:
          case GFX_RICE:
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
             glsm_enter();
@@ -1972,6 +2573,27 @@ void retro_run (void)
          EmuThreadInit();
 #endif
       }
+      
+      g_frameCheatStatus &= ~(LPL_USED_SLOWDOWN | LPL_USED_FRAME_ADVANCE | LPL_USED_SPEEDUP);
+      struct retro_throttle_state throttleState;
+      environ_cb( RETRO_ENVIRONMENT_GET_THROTTLE_STATE, &throttleState );
+      switch( throttleState.mode ) {
+         case RETRO_THROTTLE_FRAME_STEPPING:
+            g_cheatStatus |= LPL_USED_FRAME_ADVANCE;
+            g_frameCheatStatus |= LPL_USED_FRAME_ADVANCE;
+            break;
+         case RETRO_THROTTLE_SLOW_MOTION:
+            g_cheatStatus |= LPL_USED_SLOWDOWN;
+            g_frameCheatStatus |= LPL_USED_SLOWDOWN;
+            break;
+         case RETRO_THROTTLE_FAST_FORWARD:
+         case RETRO_THROTTLE_UNBLOCKED:
+            g_cheatStatus |= LPL_USED_SPEEDUP;
+            g_frameCheatStatus |= LPL_USED_SPEEDUP;
+            break;
+         default:
+            break;
+      }
 
 #ifdef NO_LIBCO
       EmuThreadStep();
@@ -1983,6 +2605,7 @@ void retro_run (void)
       {
          case GFX_GLIDE64:
          case GFX_GLN64:
+         case GFX_GLIDEN64:
          case GFX_RICE:
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
             glsm_exit();
@@ -2033,7 +2656,7 @@ size_t retro_get_memory_size(unsigned type)
 
 size_t retro_serialize_size (void)
 {
-    return 16788288 + 1024; /* < 16MB and some change... ouch */
+    return 16788348 + 1024; /* < 16MB and some change... ouch */
 }
 
 bool retro_serialize(void *data, size_t size)
@@ -2072,29 +2695,38 @@ void retro_set_controller_port_device(unsigned in_port, unsigned device)
       {
          case RETRO_DEVICE_NONE:
             if (controller[in_port].control){
-               controller[in_port].control->Present = 0;
+               controller[in_port].control->Present = CONT_NONE;
                break;
             } else {
-               pad_present[in_port] = 0;
+               pad_present[in_port] = CONT_NONE;
                break;
             }
 
          case RETRO_DEVICE_MOUSE:
             if (controller[in_port].control){
-               controller[in_port].control->Present = 2;
+               controller[in_port].control->Present = CONT_MOUSE;
                break;
             } else {
-               pad_present[in_port] = 2;
+               pad_present[in_port] = CONT_MOUSE;
+               break;
+            }
+
+         case RETRO_DEVICE_ANALOG:
+            if (controller[in_port].control){
+               controller[in_port].control->Present = CONT_GCN;
+               break;
+            } else {
+               pad_present[in_port] = CONT_GCN;
                break;
             }
 
          case RETRO_DEVICE_JOYPAD:
          default:
             if (controller[in_port].control){
-               controller[in_port].control->Present = 1;
+               controller[in_port].control->Present = CONT_JOYPAD;
                break;
             } else {
-               pad_present[in_port] = 1;
+               pad_present[in_port] = CONT_JOYPAD;
                break;
             }
       }
@@ -2175,7 +2807,7 @@ int retro_stop_stepping(void)
 
 int retro_return(bool just_flipping)
 {
-   if (stop)
+   if (mupencorestop)
       return 0;
 
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
