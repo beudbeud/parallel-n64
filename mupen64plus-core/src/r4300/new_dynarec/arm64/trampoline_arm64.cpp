@@ -5,6 +5,7 @@
 
 #include <map>
 #include <vector>
+#include <cstddef>
 
 // #define TRAMPOLINE_DEBUG
 
