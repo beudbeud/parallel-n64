@@ -62,6 +62,8 @@ static inline void jit_write_disable(void) { }
 #include "device/rcp/rsp/rsp_core.h"
 
 #if !defined(WIN32)
+#include <errno.h>
+#include <unistd.h>
 #ifndef HAVE_LIBNX
 #include <sys/mman.h>
 #else
@@ -8960,6 +8962,38 @@ static void pagespan_ds(void)
 #ifdef HAVE_LIBNX
 ALIGN(4096, char jit_memory[33554432]) __attribute__((section(".text")));
 #endif
+#if !defined(RECOMP_DBG) && !defined(WIN32)
+/* mprotect() rejects a start address that is not a multiple of the *host* page
+ * size, and extra_memory is only aligned to 4096 (its offset is frozen by the
+ * checked-in asm_defines_*.h -- see r4300_core.h).  A 16K-page kernel, which is
+ * what the Raspberry Pi 5 runs, therefore refused the call three times out of
+ * four; the return value was dropped on the floor, the JIT buffer stayed
+ * non-executable and the first jump into generated code killed the process
+ * right after "Init new dynarec".
+ *
+ * So widen the request to whole host pages.  The few kilobytes on either side
+ * belong to g_dev, which is read-write already and sits far from either end of
+ * .bss, and the dynarec only ever writes inside extra_memory itself. */
+static inline void jit_page_protect(int prot)
+{
+  long page = sysconf(_SC_PAGESIZE);
+  uintptr_t mask, start, end;
+
+  if (page <= 0)
+    page = 4096;
+  mask  = (uintptr_t)page - 1;
+  start = (uintptr_t)g_dev.r4300.extra_memory & ~mask;
+  end   = ((uintptr_t)g_dev.r4300.extra_memory + (1<<TARGET_SIZE_2) + mask) & ~mask;
+
+  if (mprotect((void *)start, end - start, prot) != 0)
+    DebugMessage(M64MSG_ERROR, "dynarec mprotect(0x%x) failed: %d (page size %ld)",
+                 prot, errno, page);
+}
+
+static inline void jit_protect_exec(void)  { jit_page_protect(PROT_READ | PROT_WRITE | PROT_EXEC); }
+static inline void jit_protect_noexec(void) { jit_page_protect(PROT_READ | PROT_WRITE); }
+#endif
+
 void new_dynarec_init(void)
 {
   DebugMessage(M64MSG_INFO, "Init new dynarec");
@@ -9020,8 +9054,7 @@ void new_dynarec_init(void)
   close(fd);
 #endif // HAVE_LIBNX
 #elif CACHE_ADDR==FIXED_CACHE_ADDR
-  mprotect ((u_char *)g_dev.r4300.extra_memory, 1<<TARGET_SIZE_2,
-            PROT_READ | PROT_WRITE | PROT_EXEC);
+  jit_protect_exec();
   base_addr = g_dev.r4300.extra_memory;
   base_addr_rx = base_addr;
 #else /*DYNAMIC_CACHE_ADDR*/
@@ -9032,8 +9065,7 @@ void new_dynarec_init(void)
   base_addr_rx = base_addr;
 #endif
 #elif NEW_DYNAREC == NEW_DYNAREC_ARM
-  mprotect ((u_char *)g_dev.r4300.extra_memory, 1<<TARGET_SIZE_2,
-            PROT_READ | PROT_WRITE | PROT_EXEC);
+  jit_protect_exec();
   base_addr = g_dev.r4300.extra_memory;
   base_addr_rx = base_addr;
 #else
@@ -9043,8 +9075,7 @@ void new_dynarec_init(void)
   assert(res!=0);
   base_addr = base_addr_rx = (void*)g_dev.r4300.extra_memory;
 #else
-  mprotect ((u_char *)g_dev.r4300.extra_memory, 1<<TARGET_SIZE_2,
-            PROT_READ | PROT_WRITE | PROT_EXEC);
+  jit_protect_exec();
   base_addr = g_dev.r4300.extra_memory;
   base_addr_rx = base_addr;
 #endif
@@ -9116,7 +9147,7 @@ void new_dynarec_cleanup(void)
   #elif NEW_DYNAREC == NEW_DYNAREC_ARM64 && CACHE_ADDR!=FIXED_CACHE_ADDR
     if (munmap (base_addr_rx, 1<<TARGET_SIZE_2) < 0) {DebugMessage(M64MSG_ERROR, "munmap() failed");}
   #else
-    mprotect(base_addr, 1<<TARGET_SIZE_2, PROT_READ | PROT_WRITE);
+    jit_protect_noexec();
   #endif
 #endif
 #ifdef ROM_COPY
