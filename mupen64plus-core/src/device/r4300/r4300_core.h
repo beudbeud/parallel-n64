@@ -190,7 +190,13 @@ struct r4300_core
 
     /* ari64 new dynarec hot state. extra_memory is a large scratch buffer the
      * JIT wants near its generated code; it is always reserved so the layout is
-     * identical whether or not ari64 is the selected core. */
+     * identical whether or not ari64 is the selected core.
+     *
+     * 4096 is a layout constant, not a page-size assumption: the offsets that
+     * follow this buffer are baked into the checked-in asm_defines_*.h that
+     * linkage_arm64.S and friends assemble against, so raising the alignment
+     * would silently desynchronise them.  new_dynarec_init() rounds to the
+     * host page size when it makes this executable instead. */
     ALIGN(4096, char extra_memory[33554432]);
     struct new_dynarec_hot_state new_dynarec_hot_state;
 
