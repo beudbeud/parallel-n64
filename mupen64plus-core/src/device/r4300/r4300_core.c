@@ -535,21 +535,26 @@ void generic_jump_to(struct r4300_core* r4300, uint32_t address)
         cached_interpreter_jump_to(r4300, address);
         break;
 
-#ifndef NO_ASM
+    /* NO_ASM must not take this case away: only hacktarux's dynarec_jump_to()
+     * is assembly, the ari64 branch just hands the address to the recompiler
+     * through its hot state.  Boards that build the ari64 dynarec *with*
+     * NO_ASM (the arm64 ones do) fell through to default: and redirected
+     * nothing, so every interrupt and every exception was dropped -- the CPU
+     * kept spinning in the game's wait-for-VI loop, no frame was ever
+     * produced and the screen stayed black under every renderer. */
     case EMUMODE_DYNAREC:
         if (r4300_jit_backend == R4300_JIT_ARI64)
         {
             r4300->new_dynarec_hot_state.pcaddr = address;
             r4300->new_dynarec_hot_state.pending_exception = 1;
         }
-#ifdef HAVE_DYNAREC_HACKTARUX
+#if !defined(NO_ASM) && defined(HAVE_DYNAREC_HACKTARUX)
         else
         {
             dynarec_jump_to(r4300, address);
         }
 #endif
         break;
-#endif
 
     default:
         /* should not happen */
