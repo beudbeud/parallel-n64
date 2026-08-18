@@ -1,4 +1,5 @@
 #include <assert.h>
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <math.h>
 #include <algorithm>
 #include <cstring>
@@ -277,6 +278,7 @@ bool DepthBufferToRDRAM::_copy(u32 _startAddress, u32 _endAddress)
 
 bool DepthBufferToRDRAM::copyToRDRAM(u32 _address)
 {
+	++gldbg_depth_to_rdram;
 	if (config.frameBufferEmulation.copyDepthToRDRAM == Config::cdSoftwareRender)
 		return true;
 

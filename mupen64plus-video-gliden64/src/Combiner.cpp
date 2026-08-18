@@ -1,4 +1,5 @@
 #include <fstream>
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <functional>
 #include <cstring>
 #include <stdio.h>
@@ -355,6 +356,7 @@ void CombinerInfo::setCombine(u64 _mux )
 	if (iter != m_combiners.end()) {
 		m_pCurrent = iter->second;
 	} else {
+		++gldbg_shader_compiles;
 		m_pCurrent = Combiner_Compile(key);
 		m_pCurrent->update(true);
 		m_combiners[m_pCurrent->getKey()] = m_pCurrent;

@@ -1,5 +1,5 @@
 #if defined(OS_MAC_OS_X) || defined(OS_IOS)
-#include <malloc/malloc.h>
+#include <malloc/malloc.h>
 #else
 #include <malloc.h>
 #endif
@@ -384,8 +384,11 @@ void DepthBufferList::init()
 	m_pCurrent = nullptr;
 }
 
+#include "gl_counters.h"   /* ponytail: temporary */
+
 void DepthBufferList::destroy()
 {
+	++gldbg_depth_destroyed;
 	m_pCurrent = nullptr;
 	m_list.clear();
 }

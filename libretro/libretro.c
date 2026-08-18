@@ -818,6 +818,37 @@ load_fail:
 extern struct rgba prescale[PRESCALE_WIDTH * PRESCALE_HEIGHT];
 #endif
 
+#if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
+#include "gl_counters.h"
+/* ponytail: temporary. Once a second, report the per-frame work that can
+ * explain a stall the software renderer does not have. */
+static void gl_report_counters(void)
+{
+   static unsigned long n = 0;
+   static unsigned long prev[5];
+   unsigned long cur[5];
+
+   if (++n % 60)
+      return;
+
+   cur[0] = gldbg_shader_compiles;
+   cur[1] = gldbg_buffers_removed;
+   cur[2] = gldbg_depth_destroyed;
+   cur[3] = gldbg_color_to_rdram;
+   cur[4] = gldbg_depth_to_rdram;
+
+   if (log_cb)
+      log_cb(RETRO_LOG_INFO,
+             "GLDBG/60f shader_compiles=%lu fb_removed=%lu depth_destroyed=%lu "
+             "color_to_rdram=%lu depth_to_rdram=%lu\n",
+             cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2],
+             cur[3] - prev[3], cur[4] - prev[4]);
+
+   prev[0] = cur[0]; prev[1] = cur[1]; prev[2] = cur[2];
+   prev[3] = cur[3]; prev[4] = cur[4];
+}
+#endif
+
 static void present_frame(void)
 {
    switch (gfx_plugin)
@@ -847,6 +878,7 @@ static void present_frame(void)
              * renderer gates its bob on. */
             if (deinterlace_bob && (g_dev.vi.regs[VI_STATUS_REG] & 0x40))
                gl_deinterlace_frame(screen_width, screen_height, g_dev.vi.field);
+            gl_report_counters();
             video_cb(RETRO_HW_FRAME_BUFFER_VALID, screen_width, screen_height, 0);
 #elif defined(HAVE_THR_AL)
             video_cb((screen_pitch == 0) ? NULL : prescale, screen_width, screen_height, screen_pitch);

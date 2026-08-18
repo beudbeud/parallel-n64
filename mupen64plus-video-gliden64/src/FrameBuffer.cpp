@@ -1,4 +1,5 @@
 #include <assert.h>
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <math.h>
 #include <algorithm>
 #include <vector>
@@ -869,6 +870,7 @@ void FrameBufferList::removeBuffer(u32 _address )
 
 void FrameBufferList::removeBuffers(u32 _width)
 {
+	++gldbg_buffers_removed;
 	m_pCurrent = nullptr;
 	for (auto iter = m_list.begin(); iter != m_list.end(); ++iter) {
 		while (iter->m_width == _width) {

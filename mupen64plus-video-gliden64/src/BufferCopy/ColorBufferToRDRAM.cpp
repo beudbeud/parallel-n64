@@ -1,4 +1,5 @@
 #include <assert.h>
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <algorithm>
 
 #include "ColorBufferToRDRAM.h"
@@ -328,6 +329,7 @@ u32 ColorBufferToRDRAM::_getRealWidth(u32 _viWidth)
 
 void ColorBufferToRDRAM::copyToRDRAM(u32 _address, bool _sync)
 {
+	++gldbg_color_to_rdram;
 	if (!isMemoryWritable(RDRAM + _address, gDP.colorImage.width << gDP.colorImage.size >> 1))
 		return;
 	if (!_prepareCopy(_address))
