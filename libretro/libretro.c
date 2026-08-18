@@ -827,10 +827,10 @@ extern struct rgba prescale[PRESCALE_WIDTH * PRESCALE_HEIGHT];
 static void gl_report_counters(void)
 {
    static unsigned long n = 0;
-   static unsigned long prev[6];
+   static unsigned long prev[8];
    static retro_time_t  prev_us = 0;
    retro_time_t now;
-   unsigned long cur[6];
+   unsigned long cur[8];
 
    if (++n % 60)
       return;
@@ -841,19 +841,22 @@ static void gl_report_counters(void)
    cur[3] = gldbg_texrect_flush;
    cur[4] = gldbg_color_to_rdram;
    cur[5] = gldbg_depth_to_rdram;
+   cur[6] = gldbg_tex_hits;
+   cur[7] = gldbg_tex_size_reload;
 
    now = cpu_features_get_time_usec();
 
    if (log_cb && prev_us != 0)
       log_cb(RETRO_LOG_INFO,
-             "GLDBG/60f ms=%lu shader_compiles=%lu draws=%lu tex_loads=%lu "
-             "texrect_flush=%lu color_to_rdram=%lu depth_to_rdram=%lu\n",
+             "GLDBG/60f ms=%lu draws=%lu tex_loads=%lu tex_hits=%lu "
+             "tex_size_reload=%lu texrect_flush=%lu\n",
              (unsigned long)((now - prev_us) / 1000),
-             cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2],
-             cur[3] - prev[3], cur[4] - prev[4], cur[5] - prev[5]);
+             cur[1] - prev[1], cur[2] - prev[2], cur[6] - prev[6],
+             cur[7] - prev[7], cur[3] - prev[3]);
 
    prev[0] = cur[0]; prev[1] = cur[1]; prev[2] = cur[2];
    prev[3] = cur[3]; prev[4] = cur[4]; prev[5] = cur[5];
+   prev[6] = cur[6]; prev[7] = cur[7];
    prev_us = now;
 }
 #endif

@@ -7,3 +7,5 @@ unsigned long gldbg_depth_to_rdram;
 unsigned long gldbg_draw_calls;
 unsigned long gldbg_tex_loads;
 unsigned long gldbg_texrect_flush;
+unsigned long gldbg_tex_hits;
+unsigned long gldbg_tex_size_reload;

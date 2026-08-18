@@ -1599,9 +1599,13 @@ void TextureCache::update(u32 _t)
 
 			activateTexture(_t, &currentTex);
 			m_hits++;
+			++gldbg_tex_hits;
 			return;
 		}
 
+		/* Same CRC, different logical tile size: the entry is thrown away and
+		 * reloaded.  If this is most of the misses, the cache key is the bug. */
+		++gldbg_tex_size_reload;
 		gfxContext.deleteTexture(currentTex.name);
 		m_lruTextureLocations.erase(locations_iter);
 		m_textures.erase(iter);
