@@ -1160,11 +1160,15 @@ struct retro_core_option_v2_definition option_defs_us[] = {
     },
     {
         CORE_NAME "-angrylion-deinterlace",
-        "(Angrylion) Deinterlacing",
         "Deinterlacing",
+        "Deinterlacing",
+        /* Not an Angrylion setting any more: it drives the hardware renderers
+         * too, so it loses the "(Angrylion)" title tag and the Angrylion
+         * category, and sits with the other general options. The key keeps its
+         * old name so existing configurations still resolve. */
         "How interlaced (480i) content is displayed. 'weave' merges both fields (sharp but combs on motion), 'bob' line-doubles the current field (no combing, slight shimmer). Affects 480i games like Kuru Kuru Fever or Hanabi de Doon and hi-res title screens.",
         NULL,
-        "angrylion",
+        NULL,
         {
             { "weave", NULL },
             { "bob", NULL },

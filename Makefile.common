@@ -309,7 +309,8 @@ endif
 
 ifeq ($(HAVE_OPENGL),1)
 SOURCES_C += $(LIBRETRO_COMM_DIR)/glsm/glsm.c \
-				 $(LIBRETRO_DIR)/aleck64_e90_gl.c
+				 $(LIBRETRO_DIR)/aleck64_e90_gl.c \
+				 $(LIBRETRO_DIR)/gl_deinterlace.c
 endif
 
 SOURCES_C += $(LIBRETRO_DIR)/libretro.c \
