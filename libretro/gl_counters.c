@@ -9,3 +9,5 @@ unsigned long gldbg_tex_loads;
 unsigned long gldbg_texrect_flush;
 unsigned long gldbg_tex_hits;
 unsigned long gldbg_tex_size_reload;
+unsigned long gldbg_tex_evicted;
+unsigned long gldbg_tex_cache_size;

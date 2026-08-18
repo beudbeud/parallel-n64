@@ -16,6 +16,8 @@ extern unsigned long gldbg_tex_loads;
 extern unsigned long gldbg_texrect_flush;
 extern unsigned long gldbg_tex_hits;
 extern unsigned long gldbg_tex_size_reload;
+extern unsigned long gldbg_tex_evicted;
+extern unsigned long gldbg_tex_cache_size;
 #ifdef __cplusplus
 }
 #endif

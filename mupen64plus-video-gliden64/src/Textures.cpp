@@ -539,6 +539,7 @@ void TextureCache::destroy()
 void TextureCache::_checkCacheSize()
 {
 	if (m_textures.size() >= m_maxCacheSize) {
+		++gldbg_tex_evicted;
 		CachedTexture& clsTex = m_textures.back();
 		gfxContext.deleteTexture(clsTex.name);
 		m_lruTextureLocations.erase(clsTex.crc);
@@ -555,6 +556,7 @@ CachedTexture * TextureCache::_addTexture(u64 _crc)
 	Textures::iterator new_iter = m_textures.begin();
 	new_iter->crc = _crc;
 	m_lruTextureLocations.insert(std::pair<u64, Textures::iterator>(_crc, new_iter));
+	gldbg_tex_cache_size = (unsigned long)m_textures.size();
 	return &(*new_iter);
 }
 
