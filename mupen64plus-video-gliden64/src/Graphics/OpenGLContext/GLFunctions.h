@@ -16,6 +16,21 @@
 #include <GL/glcorearb.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#elif defined(HAVE_OPENGLES3)
+/* GLES 3.x build.  Two rules here:
+ *
+ * - Desktop <GL/gl.h> must stay out.  It declares glEnable, glDisable and
+ *   friends as real functions, and glsmsym.h has already turned those names
+ *   into macros, so the declarations expand into nonsense.  glcorearb.h has
+ *   the PFNGL*PROC typedefs this file needs and declares nothing itself
+ *   (GL_GLEXT_PROTOTYPES is undefined above).
+ *
+ * - The GLES headers have to be pulled in *here*, before the glX -> g_glX
+ *   macros below.  glsm reaches them through rglgen_headers.h from any of a
+ *   dozen headers a translation unit may include after this one, and by then
+ *   the GLES prototypes would expand into bogus g_gl* declarations. */
+#include <glsym/rglgen_headers.h>
+#include <GL/glcorearb.h>
 #elif defined(OS_MAC_OS_X)
 #include <OpenGL/OpenGL.h>
 #include <stddef.h>
