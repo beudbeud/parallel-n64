@@ -1,3 +1,4 @@
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <assert.h>
 #include <memory.h>
 #include <algorithm>
@@ -783,6 +784,7 @@ bool TextureCache::_loadHiresBackground(CachedTexture *_pTexture, u64 & _ricecrc
 
 void TextureCache::_loadBackground(CachedTexture *pTexture)
 {
+	++gldbg_tex_loads;
 	u64 ricecrc = 0;
 	if (_loadHiresBackground(pTexture, ricecrc))
 		return;
@@ -1141,6 +1143,7 @@ void TextureCache::_getTextureDestData(CachedTexture& tmptex,
 
 void TextureCache::_load(u32 _tile, CachedTexture *_pTexture)
 {
+	++gldbg_tex_loads;
 	u64 ricecrc = 0;
 	if (_loadHiresTexture(_tile, _pTexture, ricecrc))
 		return;

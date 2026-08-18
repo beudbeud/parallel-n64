@@ -1,3 +1,4 @@
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <Config.h>
 #include "GLFunctions.h"
 #include "opengl_Attributes.h"
@@ -38,6 +39,7 @@ bool UnbufferedDrawer::_updateAttribPointer(u32 _index, const void * _ptr)
 
 void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParameters & _params)
 {
+	++gldbg_draw_calls;
 	{
 		m_cachedAttribArray->enableVertexAttribArray(triangleAttrib::position, true);
 		const void * ptr = &_params.vertices->x;
@@ -86,6 +88,7 @@ void UnbufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParame
 
 void UnbufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _params)
 {
+	++gldbg_draw_calls;
 	{
 		m_cachedAttribArray->enableVertexAttribArray(rectAttrib::position, true);
 		const void * ptr = &_params.vertices->x;

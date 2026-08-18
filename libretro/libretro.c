@@ -820,32 +820,41 @@ extern struct rgba prescale[PRESCALE_WIDTH * PRESCALE_HEIGHT];
 
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
 #include "gl_counters.h"
+#include <features/features_cpu.h>
 /* ponytail: temporary. Once a second, report the per-frame work that can
- * explain a stall the software renderer does not have. */
+ * explain a stall the software renderer does not have.  ms is wall clock for
+ * the same 60 frames, so a slow interval is visible next to its own numbers. */
 static void gl_report_counters(void)
 {
    static unsigned long n = 0;
-   static unsigned long prev[5];
-   unsigned long cur[5];
+   static unsigned long prev[6];
+   static retro_time_t  prev_us = 0;
+   retro_time_t now;
+   unsigned long cur[6];
 
    if (++n % 60)
       return;
 
    cur[0] = gldbg_shader_compiles;
-   cur[1] = gldbg_buffers_removed;
-   cur[2] = gldbg_depth_destroyed;
-   cur[3] = gldbg_color_to_rdram;
-   cur[4] = gldbg_depth_to_rdram;
+   cur[1] = gldbg_draw_calls;
+   cur[2] = gldbg_tex_loads;
+   cur[3] = gldbg_texrect_flush;
+   cur[4] = gldbg_color_to_rdram;
+   cur[5] = gldbg_depth_to_rdram;
 
-   if (log_cb)
+   now = cpu_features_get_time_usec();
+
+   if (log_cb && prev_us != 0)
       log_cb(RETRO_LOG_INFO,
-             "GLDBG/60f shader_compiles=%lu fb_removed=%lu depth_destroyed=%lu "
-             "color_to_rdram=%lu depth_to_rdram=%lu\n",
+             "GLDBG/60f ms=%lu shader_compiles=%lu draws=%lu tex_loads=%lu "
+             "texrect_flush=%lu color_to_rdram=%lu depth_to_rdram=%lu\n",
+             (unsigned long)((now - prev_us) / 1000),
              cur[0] - prev[0], cur[1] - prev[1], cur[2] - prev[2],
-             cur[3] - prev[3], cur[4] - prev[4]);
+             cur[3] - prev[3], cur[4] - prev[4], cur[5] - prev[5]);
 
    prev[0] = cur[0]; prev[1] = cur[1]; prev[2] = cur[2];
-   prev[3] = cur[3]; prev[4] = cur[4];
+   prev[3] = cur[3]; prev[4] = cur[4]; prev[5] = cur[5];
+   prev_us = now;
 }
 #endif
 

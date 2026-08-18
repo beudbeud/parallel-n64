@@ -1,3 +1,4 @@
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <Config.h>
 #include <CRC.h>
 #include "GLFunctions.h"
@@ -132,6 +133,7 @@ void BufferedDrawer::_updateRectBuffer(const graphics::Context::DrawRectParamete
 
 void BufferedDrawer::drawRects(const graphics::Context::DrawRectParameters & _params)
 {
+	++gldbg_draw_calls;
 	_updateRectBuffer(_params);
 
 	m_cachedAttribArray->enableVertexAttribArray(rectAttrib::texcoord0, _params.texrect);
@@ -193,6 +195,7 @@ void BufferedDrawer::_updateTrianglesBuffers(const graphics::Context::DrawTriang
 
 void BufferedDrawer::drawTriangles(const graphics::Context::DrawTriangleParameters & _params)
 {
+	++gldbg_draw_calls;
 	_updateTrianglesBuffers(_params);
 
 	if (isHWLightingAllowed())

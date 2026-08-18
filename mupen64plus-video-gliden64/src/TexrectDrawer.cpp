@@ -1,3 +1,4 @@
+#include "gl_counters.h"   /* ponytail: temporary */
 #include <assert.h>
 #include <algorithm>
 #include <cstring>
@@ -342,6 +343,8 @@ bool TexrectDrawer::draw()
 {
 	if (m_numRects == 0)
 		return false;
+
+	++gldbg_texrect_flush;
 
 	ValueKeeper<u64> otherMode(gDP.otherMode._u64, m_otherMode);
 	ValueKeeper<gDPScissor> scissor(gDP.scissor, m_scissor);

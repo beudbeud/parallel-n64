@@ -11,6 +11,9 @@ extern unsigned long gldbg_buffers_removed;
 extern unsigned long gldbg_depth_destroyed;
 extern unsigned long gldbg_color_to_rdram;
 extern unsigned long gldbg_depth_to_rdram;
+extern unsigned long gldbg_draw_calls;
+extern unsigned long gldbg_tex_loads;
+extern unsigned long gldbg_texrect_flush;
 #ifdef __cplusplus
 }
 #endif
