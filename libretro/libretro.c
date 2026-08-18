@@ -1114,10 +1114,19 @@ static void EmuThreadStep(void)
 
 const char* retro_get_system_directory(void)
 {
+    /* Asked for on every ini, texture cache and shader storage lookup, and
+     * it cannot change while the core is loaded. */
+    static const char* cached;
     const char* dir;
+
+    if (cached)
+       return cached;
+
+    dir = NULL;
     environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &dir);
 
-    return dir ? dir : ".";
+    cached = dir ? dir : ".";
+    return cached;
 }
 
 
@@ -2655,6 +2664,17 @@ void update_variables(bool startup)
 
    /* Aleck64 dipswitches follow the core options live */
    aleck64_apply_dips();
+
+#ifdef HAVE_GLIDEN64
+   /* GLideN64 copies these globals into its own config once, from
+    * PluginAPI::RomOpen.  Without this, changing any of its options in the
+    * frontend does nothing until the content is reloaded. */
+   {
+      extern void Config_LoadConfig(void);
+      if (!startup && emu_initialized && gfx_plugin == GFX_GLIDEN64)
+         Config_LoadConfig();
+   }
+#endif
 }
 
 static void format_saved_memory(void)
