@@ -1143,9 +1143,19 @@ void TextureCache::_getTextureDestData(CachedTexture& tmptex,
 	}
 }
 
+namespace {
+struct GldbgScope {
+	unsigned long & m_acc;
+	unsigned long long m_t0;
+	GldbgScope(unsigned long & _acc) : m_acc(_acc), m_t0(gldbg_now_us()) {}
+	~GldbgScope() { m_acc += (unsigned long)(gldbg_now_us() - m_t0); }
+};
+}
+
 void TextureCache::_load(u32 _tile, CachedTexture *_pTexture)
 {
 	++gldbg_tex_loads;
+	GldbgScope gldbg_scope(gldbg_tex_load_us);
 	u64 ricecrc = 0;
 	if (_loadHiresTexture(_tile, _pTexture, ricecrc))
 		return;
@@ -1277,7 +1287,10 @@ void TextureCache::_load(u32 _tile, CachedTexture *_pTexture)
 			params.format = colorFormat::RGBA;
 			params.dataType = glType;
 			params.data = pDest;
-			gfxContext.init2DTexture(params);
+			{
+				GldbgScope gldbg_up(gldbg_tex_upload_us);
+				gfxContext.init2DTexture(params);
+			}
 		}
 		if (mipLevel == _pTexture->max_level)
 			break;
@@ -1581,7 +1594,11 @@ void TextureCache::update(u32 _t)
 	params.width = sizes.realWidth;
 	params.height = sizes.realHeight;
 
-	const u64 crc = _calculateCRC(_t, params, sizes.bytes);
+	u64 crc;
+	{
+		GldbgScope gldbg_crc(gldbg_tex_crc_us);
+		crc = _calculateCRC(_t, params, sizes.bytes);
+	}
 
 	if (current[_t] != nullptr && current[_t]->crc == crc) {
 		activateTexture(_t, current[_t]);

@@ -21,6 +21,10 @@ extern unsigned long gldbg_tex_cache_size;
 extern unsigned long gldbg_tex_loads_ci;
 extern unsigned long gldbg_tex_loads_same_tmem;
 extern unsigned long gldbg_tex_bytes;
+extern unsigned long gldbg_tex_load_us;
+extern unsigned long gldbg_tex_upload_us;
+extern unsigned long gldbg_tex_crc_us;
+unsigned long long gldbg_now_us(void);
 #ifdef __cplusplus
 }
 #endif

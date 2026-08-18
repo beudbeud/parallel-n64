@@ -14,3 +14,12 @@ unsigned long gldbg_tex_cache_size;
 unsigned long gldbg_tex_loads_ci;
 unsigned long gldbg_tex_loads_same_tmem;
 unsigned long gldbg_tex_bytes;
+unsigned long gldbg_tex_load_us;
+unsigned long gldbg_tex_upload_us;
+unsigned long gldbg_tex_crc_us;
+
+#include <features/features_cpu.h>
+unsigned long long gldbg_now_us(void)
+{
+   return (unsigned long long)cpu_features_get_time_usec();
+}
