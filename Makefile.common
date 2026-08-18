@@ -32,11 +32,13 @@ else
 endif
 
 # GLideN64 needs OpenGL 3.3 Core or OpenGL ES 3.x (UBOs, integer textures,
-# glcorearb.h, etc.) and does not work on GLES2-only targets. The Makefile's
-# GLES=1 switch maps to -DHAVE_OPENGLES2 with no GLES3 path, so force it off
-# there. Other GLES2-only configurations should also unset HAVE_GLIDEN64.
+# glcorearb.h, etc.) and does not work on GLES2-only targets. A plain GLES=1
+# build is GLES2, so force it off there; GLES3=1 selects the GLES 3.x path
+# (glsym_es3 + -DHAVE_OPENGLES3) and keeps GLideN64 available.
 ifeq ($(GLES),1)
+ifneq ($(GLES3),1)
 	HAVE_GLIDEN64 = 0
+endif
 endif
 
 INCFLAGS += -I$(VIDEODIR_GLIDE)/Glitch64/inc
@@ -680,8 +682,15 @@ endif
 
 ifeq ($(HAVE_OPENGL),1)
 ifeq ($(GLES),1)
+ifeq ($(GLES3),1)
+	# HAVE_OPENGLES2 stays on: rice/gln64/glide64 use it to mean "GLES, not
+	# desktop GL". HAVE_OPENGLES3 selects the wider symbol set on top.
+	GLFLAGS += -DHAVE_OPENGLES -DHAVE_OPENGLES2 -DHAVE_OPENGLES3 -DDISABLE_3POINT
+	SOURCES_C += $(LIBRETRO_COMM_DIR)/glsym/glsym_es3.c
+else
 	GLFLAGS += -DHAVE_OPENGLES -DHAVE_OPENGLES2 -DDISABLE_3POINT
 	SOURCES_C += $(LIBRETRO_COMM_DIR)/glsym/glsym_es2.c
+endif
 else
 	#Texture sampling enhancements.
 	GLFLAGS += -DENABLE_3POINT -DENABLE_TEXTURE_SAMPLING

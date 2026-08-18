@@ -190,7 +190,7 @@ extern "C" void Config_LoadConfig()
 	// TODO: Make this a Core options or maybe only default to bsOnVerticalInterrupt on Android with Thr Renderer
 	config.frameBufferEmulation.bufferSwapMode = Config::bsOnVerticalInterrupt;
 
-#ifdef HAVE_OPENGLES2
+#if defined(HAVE_OPENGLES2) && !defined(HAVE_OPENGLES3)
 	config.generalEmulation.enableFragmentDepthWrite = 0;
 #else
 	config.generalEmulation.enableFragmentDepthWrite = EnableFragmentDepthWrite;

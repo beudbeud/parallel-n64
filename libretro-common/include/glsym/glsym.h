@@ -26,10 +26,13 @@
 #include "rglgen.h"
 
 #ifndef HAVE_PSGL
-#if defined(HAVE_OPENGLES2)
-#include "glsym_es2.h"
-#elif defined(HAVE_OPENGLES3)
+/* A GLES3 build also defines HAVE_OPENGLES2 -- GLES 3.x is a superset and the
+ * renderers use that define to mean "this is GLES, not desktop GL".  Test for
+ * GLES3 first so it picks the wider symbol set instead of the GLES2 one. */
+#if defined(HAVE_OPENGLES3)
 #include "glsym_es3.h"
+#elif defined(HAVE_OPENGLES2)
+#include "glsym_es2.h"
 #else
 #ifdef HAVE_LIBNX
 #include "switch/nx_glsym.h"
