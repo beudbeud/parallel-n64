@@ -952,6 +952,17 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         NULL,
         NULL,
         {
+/* Several GLideN64 options below are gated, or given a degraded default, on
+ * HAVE_OPENGLES / HAVE_OPENGLES2 as a stand-in for "weak GLES2 device": no
+ * pixel buffer objects for the asynchronous colour-buffer copy, no program
+ * binaries for the shader cache, no fragment depth write.  A GLES 3.x build
+ * defines those macros too -- the renderers read them as "this is GLES, not
+ * desktop GL" -- and so inherited every one of those restrictions on hardware
+ * that has the features.  Name the real condition. */
+#if defined(HAVE_OPENGLES2) && !defined(HAVE_OPENGLES3)
+#define GLIDEN64_GLES2_ONLY 1
+#endif
+
 #if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
             { "gliden64", NULL },
             { "glide64", NULL },
@@ -1432,7 +1443,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         },
         "standard"
     },
-#ifndef HAVE_OPENGLES2
+#ifndef GLIDEN64_GLES2_ONLY
     {
         CORE_NAME "-gliden64-MultiSampling",
         "MSAA level",
@@ -1521,17 +1532,17 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         {
             {"Off", NULL},
             {"Sync", NULL},
-#ifndef HAVE_OPENGLES2
+#ifndef GLIDEN64_GLES2_ONLY
             {"Async", "DoubleBuffer"},
             {"TripleBuffer", "TripleBuffer"},
-#endif // HAVE_OPENGLES2
+#endif
             { NULL, NULL },
         },
-#ifndef HAVE_OPENGLES2
+#ifndef GLIDEN64_GLES2_ONLY
         "Async"
 #else
         "Sync"
-#endif // HAVE_OPENGLES2
+#endif
     },
     {
         CORE_NAME "-gliden64-EnableCopyColorFromRDRAM",
@@ -1646,7 +1657,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             {"True", NULL},
             { NULL, NULL },
         },
-#ifdef HAVE_OPENGLES
+#ifdef GLIDEN64_GLES2_ONLY
         "True"
 #else
         "False"
@@ -1664,13 +1675,13 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             {"True", NULL},
             { NULL, NULL },
         },
-#ifdef HAVE_OPENGLES
+#ifdef GLIDEN64_GLES2_ONLY
         "False"
 #else
         "True"
 #endif
     },
-#if !defined(VC) && !defined(HAVE_OPENGLES)
+#if !defined(VC) && !defined(GLIDEN64_GLES2_ONLY)
     {
         CORE_NAME "-gliden64-EnableN64DepthCompare",
         "N64 Depth Compare",
@@ -1682,6 +1693,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             {"False", "Off"},
             {"True", "Fast"},
             {"Compatible", NULL},
+            { NULL, NULL },
         },
         "False"
     },
