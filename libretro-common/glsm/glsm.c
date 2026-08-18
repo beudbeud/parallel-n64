@@ -300,9 +300,22 @@ static int window_first = 0;
 static int resetting_context = 0;
 extern void retroChangeWindow();
 
+/* Separate GL_DRAW_FRAMEBUFFER / GL_READ_FRAMEBUFFER targets, VAOs,
+ * glDrawBuffers, glBlitFramebuffer and the GL_MAJOR_VERSION query are all
+ * GLES 3.0 features; only a GLES2-*only* build has to do without them.
+ * HAVE_OPENGLES2 alone does not mean that: a GLES 3.x build defines it too,
+ * because the renderers read it as "this is GLES, not desktop GL".  Taking it
+ * as "no separate draw/read targets" made glsm silently drop every
+ * glBindFramebuffer(GL_DRAW_FRAMEBUFFER, ...) on GLES 3.x -- which is the only
+ * form GLideN64 uses, so its copy-to-screen went to whatever framebuffer
+ * happened to be bound and the screen stayed black. */
+#if defined(HAVE_OPENGLES2) && !defined(HAVE_OPENGLES3)
+#define GLSM_GLES2_ONLY 1
+#endif
+
 static void bindFBO(GLenum target)
 {
-#ifdef HAVE_OPENGLES2
+#ifdef GLSM_GLES2_ONLY
    if (target == GL_FRAMEBUFFER && (gl_state.framebuf[0].desired_location != gl_state.framebuf[0].location || gl_state.framebuf[1].desired_location != gl_state.framebuf[1].location))
    {
       glBindFramebuffer(GL_FRAMEBUFFER, gl_state.framebuf[0].desired_location);
@@ -488,7 +501,7 @@ void rglReadPixels(	GLint x,
  	GLenum type,
  	GLvoid * data)
 {
-#ifdef HAVE_OPENGLES2
+#ifdef GLSM_GLES2_ONLY
    bindFBO(GL_FRAMEBUFFER);
 #else
    bindFBO(GL_READ_FRAMEBUFFER);
@@ -1019,7 +1032,7 @@ void rglFramebufferTexture2D(GLenum target, GLenum attachment,
    int type;
    if (target == GL_FRAMEBUFFER)
       type = 0;
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    else if (target == GL_DRAW_FRAMEBUFFER)
       type = 0;
    else if (target == GL_READ_FRAMEBUFFER)
@@ -1260,7 +1273,7 @@ void rglFramebufferRenderbuffer(GLenum target, GLenum attachment,
    int type;
    if (target == GL_FRAMEBUFFER)
       type = 0;
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    else if (target == GL_DRAW_FRAMEBUFFER)
       type = 0;
    else if (target == GL_READ_FRAMEBUFFER)
@@ -2351,7 +2364,7 @@ void rglBindFramebuffer(GLenum target, GLuint framebuffer)
          gl_state.framebuf[0].desired_location = framebuffer;
          gl_state.framebuf[1].desired_location = framebuffer;
    }
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    else if (target == GL_DRAW_FRAMEBUFFER) {
          gl_state.framebuf[0].desired_location = framebuffer;
    }
@@ -2375,7 +2388,7 @@ void rglDrawBuffers(GLsizei n, const GLenum *bufs)
 #ifdef GLSM_DEBUG
    log_cb(RETRO_LOG_INFO, "glDrawBuffers.\n");
 #endif
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    if (gl_state.framebuf[0].desired_location < MAX_FRAMEBUFFERS) {
       if (framebuffers[gl_state.framebuf[0].desired_location]->draw_buf_set == 0)
       {
@@ -2727,7 +2740,7 @@ void rglBlitFramebuffer(
 #ifdef GLSM_DEBUG
    log_cb(RETRO_LOG_INFO, "glBlitFramebuffer.\n");
 #endif
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    GLuint src_attachment;
    GLuint dst_attachment;
    const bool good_pointer = gl_state.framebuf[0].desired_location < MAX_FRAMEBUFFERS && gl_state.framebuf[1].desired_location < MAX_FRAMEBUFFERS;
@@ -3089,7 +3102,7 @@ static void glsm_state_setup(void)
    GLint majorVersion = 0;
    GLint minorVersion = 0;
    bool copy_image_support_version = 0;
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    glGetIntegerv(GL_MAJOR_VERSION, &majorVersion);
    glGetIntegerv(GL_MINOR_VERSION, &minorVersion);
 #endif
@@ -3248,7 +3261,7 @@ static void glsm_state_bind(void)
          framebuffers[default_framebuffer] == NULL)
       framebuffers[default_framebuffer] =
          (struct gl_framebuffers*)calloc(1, sizeof(struct gl_framebuffers));
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    if (gl_state.bindvertex.array != 0) {
       glBindVertexArray(gl_state.bindvertex.array);
       gl_state.array_buffer = 0;
@@ -3493,7 +3506,7 @@ static void glsm_state_unbind(void)
    glPixelStorei(GL_PACK_ALIGNMENT, 4);
 
 
-#ifndef HAVE_OPENGLES2
+#ifndef GLSM_GLES2_ONLY
    if (gl_state.bindvertex.array != 0)
       glBindVertexArray(0);
    else
