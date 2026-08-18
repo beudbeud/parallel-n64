@@ -78,6 +78,7 @@ extern retro_environment_t        environ_cb;
 static int16_t  audio_acc[AUDIO_ACC_FRAMES * 2];
 static size_t   audio_acc_frames;        /* stereo frames currently held */
 static unsigned current_sample_rate;     /* 0 until first set_audio_format */
+static int      rate_is_from_game;       /* the game wrote AI_DACRATE itself */
 static double   current_sample_rate_exact; /* the same rate, unrounded */
 
 
@@ -85,12 +86,24 @@ void init_audio_libretro(void)
 {
    audio_acc_frames = 0;
    current_sample_rate = 0;
+   rate_is_from_game   = 0;
 }
 
 void deinit_audio_libretro(void)
 {
    audio_acc_frames = 0;
    current_sample_rate = 0;
+   rate_is_from_game   = 0;
+}
+
+/* Whether the rate came from the game rather than from a substituted default.
+ * The AI controller passes divider == 0 until AI_DACRATE has been written, so
+ * a nonzero current_sample_rate proves nothing: the first call carries the
+ * 44100 Hz stand-in, and the game's own rate -- and the av_info announcement
+ * that goes with it -- still follows. See present_frame(). */
+int audio_sample_rate_settled_libretro(void)
+{
+   return rate_is_from_game;
 }
 
 double get_audio_sample_rate_libretro(void)
@@ -187,6 +200,8 @@ void set_audio_format_via_libretro(unsigned int frequency,
 
    current_sample_rate       = frequency;
    current_sample_rate_exact = exact;
+   if (divider != 0)
+      rate_is_from_game = 1;
 
 
    if (environ_cb)

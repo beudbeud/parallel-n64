@@ -878,6 +878,40 @@ void emu_step_render(void)
       return;
    }
 
+   /* Nor before the game has programmed its DAC rate.
+    *
+    * The rate is unknown at retro_get_system_av_info() time -- the ROM has not
+    * run yet -- so the audio backend announces the corrected one through
+    * RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO as soon as the game writes it, a few
+    * frames in.  The call is legitimate, but the frontend reinitialises its
+    * whole video pipeline on it, and a CRT setup loses the mode switchres
+    * picked from the first frame: it falls back to the default KMS mode and
+    * never returns, leaving the picture at a fraction of its resolution.
+    *
+    * The software renderer never shows this because it is slow to produce its
+    * first frame -- the game has written AI_DACRATE by then, so the
+    * announcement lands before the frontend's first video setup rather than
+    * after it.  Withhold the hardware path's first frames for the same reason.
+    * It has to be a real absence: video_cb(NULL, ...) is still a presented
+    * frame carrying the geometry switchres switches on, so duplicating here
+    * would change nothing.
+    *
+    * The rate arrives with the game's first AI DMA, a handful of frames for
+    * most titles but not guaranteed, so bound the wait at a second; a game
+    * that never plays audio then simply starts a second late. */
+   {
+      extern int audio_sample_rate_settled_libretro(void);
+      static unsigned held = 0;
+
+      if (!audio_sample_rate_settled_libretro() && held < 60)
+      {
+         ++held;
+         frame_latched   = false;
+         frame_presented = false;
+         return;
+      }
+   }
+
    if (frame_latched)
    {
       frame_latched = false;
