@@ -100,10 +100,14 @@ static const struct retro_hw_render_interface_vulkan *vulkan;
 void aleck64_e90_gl_draw(unsigned out_width, unsigned out_height);
 void aleck64_e90_gl_context_reset(void);
 void aleck64_e90_gl_destroy(void);
+void gl_deinterlace_frame(unsigned width, unsigned height, unsigned field);
+void gl_deinterlace_context_reset(void);
 #else
 #define aleck64_e90_gl_draw(w, h) ((void)0)
 #define aleck64_e90_gl_context_reset() ((void)0)
 #define aleck64_e90_gl_destroy() ((void)0)
+#define gl_deinterlace_frame(w, h, f) ((void)0)
+#define gl_deinterlace_context_reset() ((void)0)
 #endif
 
 #define ISHEXDEC ((codeLine[cursor]>='0') && (codeLine[cursor]<='9')) || ((codeLine[cursor]>='a') && (codeLine[cursor]<='f')) || ((codeLine[cursor]>='A') && (codeLine[cursor]<='F'))
@@ -233,6 +237,9 @@ int frame_hidden                    = 0;
 uint32_t gfx_plugin_accuracy        = 2;
 static enum fork_rsp_plugin_type
                  rsp_plugin;
+/* "bob" selected on the deinterlacing option: the hardware path acts on it
+ * in present_frame(), the software path through angrylion_set_deinterlace(). */
+static unsigned deinterlace_bob     = 0;
 uint32_t screen_width               = 640;
 uint32_t screen_height              = 480;
 float    screen_aspect_ratio        = 4.0 / 3.0;
@@ -835,6 +842,11 @@ static void present_frame(void)
             /* the E90 sprite chip draws mtetrisc's playfield; the hardware
              * renderers leave the frame on the GPU, so it is composited there */
             aleck64_e90_gl_draw(screen_width, screen_height);
+            /* Interlaced frame and bob selected: one field, line doubled.
+             * Serrate is the VI's own interlace bit, the same one the software
+             * renderer gates its bob on. */
+            if (deinterlace_bob && (g_dev.vi.regs[VI_STATUS_REG] & 0x40))
+               gl_deinterlace_frame(screen_width, screen_height, g_dev.vi.field);
             video_cb(RETRO_HW_FRAME_BUFFER_VALID, screen_width, screen_height, 0);
 #elif defined(HAVE_THR_AL)
             video_cb((screen_pitch == 0) ? NULL : prescale, screen_width, screen_height, screen_pitch);
@@ -1190,6 +1202,7 @@ static void context_reset(void)
    }
 
    aleck64_e90_gl_context_reset();
+   gl_deinterlace_context_reset();
    reinit_gfx_plugin();
 }
 
@@ -1782,9 +1795,10 @@ void update_variables(bool startup)
 
    var.key = "parallel-n64-angrylion-deinterlace";
    var.value = NULL;
-   angrylion_set_deinterlace(
-      environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value
-      && !strcmp(var.value, "bob"));
+   deinterlace_bob =
+      (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value
+       && !strcmp(var.value, "bob")) ? 1 : 0;
+   angrylion_set_deinterlace(deinterlace_bob);
 
    var.key = "parallel-n64-angrylion-sync";
    var.value = NULL;
