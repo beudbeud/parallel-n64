@@ -2853,15 +2853,13 @@ static void glsm_exit(void)
    if (gfx_plugin == GFX_PARALLEL)
       return;
 #endif
-   /* The per-frame glsm state bind/unbind only became live in 906a466c (it was
-    * dead under the old mupencorestop guard). It is what lets glide64 composite
-    * on the gl (compatibility) driver, but taking it live hangs gln64 and rice
-    * at startup on both gl and glcore -- those renderers were already correct on
-    * glcore with no per-frame bind. Restrict the live cycle to glide64 until the
-    * gln64/rice hang is root-caused; the other GL renderers keep their prior
-    * (no per-frame bind) behaviour, which is their known-good state. */
-   if (gfx_plugin != GFX_GLIDE64 && gfx_plugin != GFX_GLN64 && gfx_plugin != GFX_RICE)
-      return;
+   /* Every GL renderer gets the per-frame cycle. The list this used to filter
+    * on had grown to hold every renderer routed here except GLideN64, so it
+    * only ever excluded that one -- and excluding it is what left GLideN64
+    * drawing with whatever GL state the frontend had last set. RetroArch
+    * changes the KMS mode under a CRT setup and leaves its own viewport behind
+    * (640x240 for the 15kHz mode while the core renders 640x480); without the
+    * bind the core inherits it and the picture comes out squashed. */
    glsm_ctl(GLSM_CTL_STATE_UNBIND, NULL);
 #endif
 }
@@ -2879,11 +2877,7 @@ static void glsm_enter(void)
    if (gfx_plugin == GFX_PARALLEL)
       return;
 #endif
-   /* See glsm_exit(): the live per-frame bind is restricted to glide64, the only
-    * renderer it is validated to help on the gl driver. gln64 and rice hang with
-    * it live, so they keep their prior no-per-frame-bind behaviour here. */
-   if (gfx_plugin != GFX_GLIDE64 && gfx_plugin != GFX_GLN64 && gfx_plugin != GFX_RICE)
-      return;
+   /* See glsm_exit(): every GL renderer routed here gets the per-frame bind. */
    glsm_ctl(GLSM_CTL_STATE_BIND, NULL);
 #endif
 }
