@@ -11,3 +11,6 @@ unsigned long gldbg_tex_hits;
 unsigned long gldbg_tex_size_reload;
 unsigned long gldbg_tex_evicted;
 unsigned long gldbg_tex_cache_size;
+unsigned long gldbg_tex_loads_ci;
+unsigned long gldbg_tex_loads_same_tmem;
+unsigned long gldbg_tex_bytes;

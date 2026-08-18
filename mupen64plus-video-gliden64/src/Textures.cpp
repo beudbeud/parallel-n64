@@ -1615,6 +1615,19 @@ void TextureCache::update(u32 _t)
 
 	m_misses++;
 
+	/* Which kind of miss: a paletted texture whose palette moved (the CRC
+	 * folds the palette in), or one reloaded at the same TMEM address as the
+	 * one just before it -- both mean the texels did not really change. */
+	if (gDP.otherMode.textureLUT != G_TT_NONE || pTile->format == G_IM_FMT_CI)
+		++gldbg_tex_loads_ci;
+	{
+		static u32 last_tmem = 0xffffffff;
+		if (pTile->tmem == last_tmem)
+			++gldbg_tex_loads_same_tmem;
+		last_tmem = pTile->tmem;
+	}
+	gldbg_tex_bytes += sizes.realWidth * sizes.realHeight * 4;
+
 	CachedTexture * pCurrent = _addTexture(crc);
 
 	pCurrent->address = gDP.loadInfo[pTile->tmem].texAddress;
