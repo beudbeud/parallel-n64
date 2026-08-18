@@ -3074,7 +3074,7 @@ void retro_run (void)
             switch (gfx_plugin)
             {
                case GFX_GLIDE64:
-#if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
+#ifdef HAVE_GLIDE64
                   ChangeSize();
 #endif
                   break;
@@ -3414,7 +3414,7 @@ int retro_return(bool just_flipping)
    if (mupencorestop)
       return 0;
 
-#if defined(HAVE_OPENGL) || defined(HAVE_OPENGLES)
+#ifdef HAVE_GLIDE64
    /* Flush Glitch64's buffered vertices on every return - including
     * the VI frame break, which can land mid-draw: the VBO state must
     * not span glsm_exit()/glsm_enter() across the slice boundary. */
