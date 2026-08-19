@@ -2558,7 +2558,9 @@ void rglProgramBinary(GLuint program,
 #ifdef GLSM_DEBUG
    log_cb(RETRO_LOG_INFO, "glProgramBinary.\n");
 #endif
-#if !defined(HAVE_OPENGLES) || defined(HAVE_OPENGLES) && defined(HAVE_OPENGLES_3_1)
+/* glProgramBinary is core since GLES 3.0, not 3.1; requiring 3.1 here made a
+ * GLES 3.x build silently drop every cached shader binary. */
+#if !defined(HAVE_OPENGLES) || defined(HAVE_OPENGLES) && defined(HAVE_OPENGLES3)
    glProgramBinary(program, binaryFormat, binary, length);
 #else
    printf("WARNING! Not implemented.\n");
