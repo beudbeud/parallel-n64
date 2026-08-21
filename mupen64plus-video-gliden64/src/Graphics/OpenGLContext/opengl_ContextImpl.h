@@ -60,6 +60,8 @@ namespace opengl {
 
 		void deleteTexture(graphics::ObjectHandle _name) override;
 
+		void resetTextureState(graphics::ObjectHandle _name) override;
+
 		void init2DTexture(const graphics::Context::InitTextureParams & _params) override;
 
 		void update2DTexture(const graphics::Context::UpdateTextureDataParams & _params) override;

@@ -234,6 +234,12 @@ void ContextImpl::deleteTexture(graphics::ObjectHandle _name)
 	m_cachedFunctions->getTexParams()->erase(u32(_name));
 }
 
+void ContextImpl::resetTextureState(graphics::ObjectHandle _name)
+{
+	m_init2DTexture->reset(_name);
+	m_cachedFunctions->getTexParams()->erase(u32(_name));
+}
+
 void ContextImpl::init2DTexture(const graphics::Context::InitTextureParams & _params)
 {
 	m_init2DTexture->init2DTexture(_params);
