@@ -29,6 +29,7 @@ namespace graphics {
 		virtual void setPolygonOffset(f32 _factor, f32 _units) = 0;
 		virtual ObjectHandle createTexture(Parameter _target) = 0;
 		virtual void deleteTexture(ObjectHandle _name) = 0;
+		virtual void resetTextureState(ObjectHandle _name) = 0;
 		virtual void init2DTexture(const Context::InitTextureParams & _params) = 0;
 		virtual void update2DTexture(const Context::UpdateTextureDataParams & _params) = 0;
 		virtual void setTextureParameters(const Context::TexParameters & _parameters) = 0;

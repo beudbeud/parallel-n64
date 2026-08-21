@@ -86,6 +86,10 @@ namespace graphics {
 
 		void deleteTexture(ObjectHandle _name);
 
+		/* Forget everything cached about a texture name that is being handed
+		 * to a different texture, without deleting the object itself. */
+		void resetTextureState(ObjectHandle _name);
+
 		struct InitTextureParams {
 			ObjectHandle handle;
 			TextureUnitParam textureUnitIndex{0};

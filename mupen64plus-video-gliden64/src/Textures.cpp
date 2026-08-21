@@ -559,6 +559,13 @@ CachedTexture * TextureCache::_addTexture(u64 _crc)
 	else {
 		name = m_freeTextures.back();
 		m_freeTextures.pop_back();
+		/* deleteTexture() used to drop the state the context caches per texture
+		 * name (the filter/wrap/GL_TEXTURE_MAX_LEVEL set on it, and the
+		 * glTexStorage2D-already-issued flag).  Recycling the object skips that,
+		 * so the new texture inherited the evicted one's parameters: with a
+		 * stale GL_TEXTURE_MAX_LEVEL a texture without mipmaps is incomplete and
+		 * samples black.  Drop the cached state as a delete would. */
+		gfxContext.resetTextureState(name);
 	}
 	m_textures.emplace_front(name);
 	Textures::iterator new_iter = m_textures.begin();

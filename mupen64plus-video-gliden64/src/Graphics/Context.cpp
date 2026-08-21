@@ -137,6 +137,11 @@ void Context::deleteTexture(ObjectHandle _name)
 	m_impl->deleteTexture(_name);
 }
 
+void Context::resetTextureState(ObjectHandle _name)
+{
+	m_impl->resetTextureState(_name);
+}
+
 void Context::init2DTexture(const InitTextureParams & _params)
 {
 	m_impl->init2DTexture(_params);
