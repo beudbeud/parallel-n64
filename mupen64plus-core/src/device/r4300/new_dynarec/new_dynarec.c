@@ -3895,22 +3895,58 @@ static void wb_invalidate(signed char pre[],signed char entry[],uint64_t dirty,u
       }
     }
   }
-  // Move from one register to another (no writeback)
-  for(hr=0;hr<HOST_REGS;hr++) {
-    if(!IS_REG_EXCLUDED(hr)) {
-      if(pre[hr]!=entry[hr]) {
-        if(pre[hr]>=0&&(pre[hr]&63)<TEMPREG) {
-          int nr;
-          if((nr=get_reg(entry,pre[hr]))>=0) {
-            #ifdef NATIVE_64
-            if(pre[hr]>=INVCP) emit_mov64(hr,nr);
-            else
-            #endif
-            emit_mov(hr,nr);
+  // Move from one register to another (no writeback).
+  //
+  // These are a parallel move: every source is read from the state that
+  // held before any of them ran.  Emitting them in host-register order
+  // overwrote a destination that a later move still had to read - a
+  // 64-bit value whose halves were being relocated lost its upper word
+  // that way, and the store that followed wrote the lower word twice.
+  // Emit a move only once nothing else still needs its destination, and
+  // break a cycle through the scratch register.
+  {
+    int src[HOST_REGS], dst[HOST_REGS], wide[HOST_REGS], n=0, k, progress;
+    for(hr=0;hr<HOST_REGS;hr++) {
+      if(!IS_REG_EXCLUDED(hr)) {
+        if(pre[hr]!=entry[hr]) {
+          if(pre[hr]>=0&&(pre[hr]&63)<TEMPREG) {
+            int nr;
+            if((nr=get_reg(entry,pre[hr]))>=0) {
+              src[n]=hr; dst[n]=nr; wide[n]=(pre[hr]>=INVCP); n++;
+            }
           }
         }
       }
     }
+    do {
+      progress=0;
+      for(k=0;k<n;k++) {
+        int j,blocked=0;
+        if(src[k]<0) continue;
+        for(j=0;j<n;j++)
+          if(j!=k && src[j]==dst[k]) { blocked=1; break; }
+        if(!blocked) {
+          #ifdef NATIVE_64
+          if(wide[k]) emit_mov64(src[k],dst[k]);
+          else
+          #endif
+          emit_mov(src[k],dst[k]);
+          src[k]=-1; progress=1;
+        }
+      }
+      if(!progress) {
+        for(k=0;k<n;k++) {
+          if(src[k]<0) continue;
+          /* cycle: stage this one through the scratch register */
+          #ifdef NATIVE_64
+          if(wide[k]) { emit_mov64(src[k],HOST_TEMPREG); emit_mov64(HOST_TEMPREG,dst[k]); }
+          else
+          #endif
+          { emit_mov(src[k],HOST_TEMPREG); emit_mov(HOST_TEMPREG,dst[k]); }
+          src[k]=-1; progress=1; break;
+        }
+      }
+    } while(progress);
   }
 }
 
@@ -4925,6 +4961,60 @@ static void do_cop1stub(int n)
   emit_jmp((intptr_t)fp_exception);
 }
 
+/* Fold an XKPHYS base onto the 32-bit segment the memory map decodes.
+ *
+ * Bits 63:62 of 10 mean the low bits of the address are a physical address
+ * outright.  64-bit-clean code reaches for that to touch hardware without
+ * wanting a TLB entry - libdragon reads the cartridge through
+ * 0x9000000010001000 - and the compiled address arithmetic only ever takes
+ * the low half of the base register, so the access went to a KUSEG address
+ * that is not the cartridge.  The interpreter folds this in its effective
+ * address decode; the compiled paths have to do it themselves.
+ *
+ * The stubs are the one choke point every non-RDRAM access funnels
+ * through, and the natural place for the fold: the inline fast path only
+ * ever serves KSEG0 RDRAM, which no XKPHYS access can reach after
+ * truncation, and inside a stub nothing has been clobbered yet while
+ * HOST_TEMPREG sits outside register allocation entirely, so there is a
+ * scratch register that cannot alias the address register.  The fold is
+ * emitted only when the base register was 64-bit wide at this point; for
+ * the overwhelmingly common sign-extended 32-bit base it costs nothing.
+ * The address register itself is never modified, because when the offset
+ * is zero it aliases the guest base register's own low half. */
+static void emit_xkphys_fold(int i,const struct regstat *i_regs,int addr)
+{
+  signed char sh;
+  intptr_t no_fold1,no_fold2,done;
+  if(rs1[i]==0) {
+    emit_writeword(addr,(intptr_t)&g_dev.r4300.new_dynarec_hot_state.address);
+    return;
+  }
+  if((i_regs->was32>>rs1[i])&1) {
+    emit_writeword(addr,(intptr_t)&g_dev.r4300.new_dynarec_hot_state.address);
+    return;
+  }
+  sh=get_reg(i_regs->regmap,rs1[i]|64);
+  if(sh<0) {
+    emit_loadreg(rs1[i]|64,HOST_TEMPREG);
+    sh=HOST_TEMPREG;
+  }
+  emit_testimm(sh,0x80000000);
+  no_fold1=(intptr_t)out;
+  emit_jeq(0);
+  emit_testimm(sh,0x40000000);
+  no_fold2=(intptr_t)out;
+  emit_jne(0);
+  emit_mov(addr,HOST_TEMPREG);
+  emit_orimm(HOST_TEMPREG,0xA0000000,HOST_TEMPREG);
+  emit_writeword(HOST_TEMPREG,(intptr_t)&g_dev.r4300.new_dynarec_hot_state.address);
+  done=(intptr_t)out;
+  emit_jmp(0);
+  set_jump_target(no_fold1,(intptr_t)out);
+  set_jump_target(no_fold2,(intptr_t)out);
+  emit_writeword(addr,(intptr_t)&g_dev.r4300.new_dynarec_hot_state.address);
+  set_jump_target(done,(intptr_t)out);
+}
+
 static void do_readstub(int n)
 {
   assem_debug("do_readstub %x",start+stubs[n][3]*4);
@@ -4947,7 +5037,7 @@ static void do_readstub(int n)
   }
 
   assert(addr>=0);
-  emit_writeword(addr,(intptr_t)&g_dev.r4300.new_dynarec_hot_state.address);
+  emit_xkphys_fold(i,i_regs,addr);
 
   intptr_t ftable=0;
   if(type==LOADB_STUB||type==LOADBU_STUB)
@@ -5114,11 +5204,23 @@ static void inline_readstub(int type, int i, u_int addr_const, char addr, struct
 
   restore_regs(reglist);
 
-  if((signed int)addr_const>=(signed int)0xC0000000) {
-    // Theoretically we can have a pagefault here, if the TLB has never
-    // been enabled and the address is outside the range 80000000..BFFFFFFF
-    // Write out the registers so the pagefault can be handled.  This is
-    // a very rare case and likely represents a bug.
+  /* Take the exception the helper flagged, whatever the address was.
+   *
+   * This check used to be skipped for anything below 0xC0000000 on the
+   * assumption that only a TLB pagefault could raise here.  The helper
+   * also runs UPDATE_COUNT_OUT, which only rewinds cycle_count when no
+   * exception is pending: if one is pending and the check is skipped,
+   * the block keeps running with the cycle count already advanced, the
+   * exception is never delivered, and the next interrupt check raises
+   * the same event again - an unbreakable gen_interrupt/cc_interrupt
+   * spin.  do_readstub has always checked unconditionally; the inline
+   * form has to as well.
+   *
+   * Default builds only reach the inline form for constant addresses
+   * outside RDRAM, so the gap was mostly latent, but it made the whole
+   * INTERPRET_LOAD path - where every load comes through here - hang on
+   * the first exception. */
+  {
     emit_cmpmem_imm((intptr_t)&g_dev.r4300.new_dynarec_hot_state.pending_exception,0);
     intptr_t jaddr=(intptr_t)out;
     emit_jeq(0);
@@ -5172,7 +5274,7 @@ static void do_writestub(int n)
   }
   assert(addr>=0);
   assert(rt>=0);
-  emit_writeword(addr,(intptr_t)&g_dev.r4300.new_dynarec_hot_state.address);
+  emit_xkphys_fold(i,i_regs,addr);
 
   intptr_t ftable=0;
   if(type==STOREB_STUB){
@@ -5538,7 +5640,10 @@ static void cop0_assemble(int i,struct regstat *i_regs)
     else if((source[i]&0x3f)==0x18) // ERET
     {
       assert(!is_delayslot);
-      int count=ccadj[i];
+      /* ERET has no delay slot, so it costs one instruction where a branch
+       * and its slot cost two.  Charging ccadj[i] paid for neither: the
+       * guest clock lost two cycles on every exception return. */
+      int count=ccadj[i]+1;
       if(i_regs->regmap[HOST_CCREG]!=CCREG) emit_loadreg(CCREG,HOST_CCREG);
       emit_addimm(HOST_CCREG,CLOCK_DIVIDER*count,HOST_CCREG);
       emit_jmp((intptr_t)jump_eret);
@@ -7907,8 +8012,6 @@ static void sjump_assemble(int i,struct regstat *i_regs)
   if(i>(ba[i]-start)>>2) invert=1;
   #endif
 
-  //if(opcode2[i]>=0x10) return; // FIXME (BxxZAL)
-  assert(opcode2[i]<0x10||rs1[i]==0); // FIXME (BxxZAL)
 
   if(ooo[i]) {
     s1l=get_reg(branch_regs[i].regmap,rs1[i]);
@@ -8002,7 +8105,7 @@ static void sjump_assemble(int i,struct regstat *i_regs)
       if(!only32)
       {
         assert(s1h>=0);
-        if(opcode2[i]==0) // BLTZ
+        if((opcode2[i]&1)==0) // BLTZ/BLTZAL
         {
           emit_test(s1h,s1h);
           if(invert){
@@ -8013,7 +8116,7 @@ static void sjump_assemble(int i,struct regstat *i_regs)
             emit_js(0);
           }
         }
-        if(opcode2[i]==1) // BGEZ
+        else // BGEZ/BGEZAL
         {
           emit_test(s1h,s1h);
           if(invert){
@@ -8028,7 +8131,7 @@ static void sjump_assemble(int i,struct regstat *i_regs)
       else
       {
         assert(s1l>=0);
-        if(opcode2[i]==0) // BLTZ
+        if((opcode2[i]&1)==0) // BLTZ/BLTZAL
         {
           emit_test(s1l,s1l);
           if(invert){
@@ -8039,7 +8142,7 @@ static void sjump_assemble(int i,struct regstat *i_regs)
             emit_js(0);
           }
         }
-        if(opcode2[i]==1) // BGEZ
+        else // BGEZ/BGEZAL
         {
           emit_test(s1l,s1l);
           if(invert){
@@ -8098,36 +8201,30 @@ static void sjump_assemble(int i,struct regstat *i_regs)
       if(!only32)
       {
         assert(s1h>=0);
-        if((opcode2[i]&0x1d)==0) // BLTZ/BLTZL
-        {
-          emit_test(s1h,s1h);
-          nottaken=(intptr_t)out;
-          emit_jns(1);
-        }
-        if((opcode2[i]&0x1d)==1) // BGEZ/BGEZL
-        {
-          emit_test(s1h,s1h);
-          nottaken=(intptr_t)out;
-          emit_js(1);
-        }
+        emit_test(s1h,s1h);
       } // if(!only32)
       else
       {
         assert(s1l>=0);
-        if((opcode2[i]&0x1d)==0) // BLTZ/BLTZL
-        {
-          emit_test(s1l,s1l);
-          nottaken=(intptr_t)out;
-          emit_jns(1);
-        }
-        if((opcode2[i]&0x1d)==1) // BGEZ/BGEZL
-        {
-          emit_test(s1l,s1l);
-          nottaken=(intptr_t)out;
-          emit_js(1);
-        }
+        emit_test(s1l,s1l);
       }
     } // if(!unconditional)
+    if(rt1[i]==31) {
+      int rt,return_address;
+      rt=get_reg(branch_regs[i].regmap,31);
+      if(rt>=0) {
+        // Save the PC even if the branch is not taken
+        return_address=start+i*4+8;
+        emit_movimm(return_address,rt); // PC into link register
+      }
+    }
+    if(!unconditional) {
+      nottaken=(intptr_t)out;
+      if((opcode2[i]&1)==0) // BLTZ/BLTZL/BLTZAL/BLTZALL
+        emit_jns(1);
+      else // BGEZ/BGEZL/BGEZAL/BGEZALL
+        emit_js(1);
+    }
     int adj;
     uint64_t ds_unneeded=branch_regs[i].u;
     uint64_t ds_unneeded_upper=branch_regs[i].uu;
@@ -9064,6 +9161,16 @@ int new_recompile_block(int addr)
     source = (u_int *)((uintptr_t)g_dev.rdram.dram+start-(uintptr_t)0x80000000);
     pagelimit = 0x80800000;
   }
+  else if (((u_int)addr - 0x90000000 < (u_int)g_dev.cart.cart_rom.rom_size ||
+            (u_int)addr - 0xb0000000 < (u_int)g_dev.cart.cart_rom.rom_size)) {
+    /* Execute-in-place from cartridge ROM.  libdragon's IPL3 runs loader
+     * stages straight out of the cart through both the cached and uncached
+     * windows before RDRAM is fully set up.  The ROM buffer uses the same
+     * host word order as RDRAM, so pass 1 can read it directly, and since
+     * the contents never change these blocks never need invalidation. */
+    source = (u_int *)((uintptr_t)g_dev.cart.cart_rom.rom+(start&0x0FFFFFFF));
+    pagelimit = (start&0xF0000000)+(u_int)g_dev.cart.cart_rom.rom_size;
+  }
   else if ((signed int)addr >= (signed int)0xC0000000) {
     //DebugMessage(M64MSG_VERBOSE, "addr=%x mm=%x",(u_int)addr,(g_dev.r4300.new_dynarec_hot_state.memory_map[start>>12]<<2));
     //if(g_dev.r4300.cp0.tlb.LUT_r[start>>12])
@@ -9397,6 +9504,9 @@ int new_recompile_block(int addr)
         rt1[i]=(source[i]>>16)&0x1f;
         rt2[i]=0;
         imm[i]=(short)source[i];
+        /* The effective address is the full 64-bit base: the XKPHYS tag
+         * lives in the upper half, which the stub fold reads. */
+        us1[i]=rs1[i];
         break;
       case STORE:
       case STORELR:
@@ -9405,7 +9515,8 @@ int new_recompile_block(int addr)
         rt1[i]=0;
         rt2[i]=0;
         imm[i]=(short)source[i];
-        if(op==0x2c||op==0x2d||op==0x3f) us1[i]=rs2[i]; // 64-bit SDL/SDR/SD
+        us1[i]=rs1[i]; // full 64-bit base (see LOAD)
+        if(op==0x2c||op==0x2d||op==0x3f) us2[i]=rs2[i]; // 64-bit SDL/SDR/SD
         break;
       case LOADLR:
         // LWL/LWR only load part of the register,
@@ -9415,7 +9526,8 @@ int new_recompile_block(int addr)
         rt1[i]=(source[i]>>16)&0x1f;
         rt2[i]=0;
         imm[i]=(short)source[i];
-        if(op==0x1a||op==0x1b) us1[i]=rs2[i]; // LDR/LDL
+        us1[i]=rs1[i]; // full 64-bit base (see LOAD)
+        if(op==0x1a||op==0x1b) us2[i]=rs2[i]; // LDR/LDL
         if(op==0x26) dep1[i]=rt1[i]; // LWR
         break;
       case IMM16:
@@ -9568,6 +9680,7 @@ int new_recompile_block(int addr)
         rt1[i]=0;
         rt2[i]=0;
         imm[i]=(short)source[i];
+        us1[i]=rs1[i]; // full 64-bit base (see LOAD)
         break;
       case FLOAT:
       case FCONV:
@@ -10159,6 +10272,10 @@ int new_recompile_block(int addr)
             {
               alloc_reg64(&current,i,rs1[i]);
             }
+            if (rt1[i]==31) { // BLTZALL/BGEZALL
+              alloc_reg(&current,i,31);
+              dirty_reg(&current,31);
+            }
           }
           ds=1;
           //current.isconst=0;
@@ -10546,11 +10663,15 @@ int new_recompile_block(int addr)
             dirty_reg(&current,CCREG);
             memcpy(&branch_regs[i-1].regmap_entry,&branch_regs[i-1].regmap,sizeof(current.regmap));
           }
-          // FIXME: BLTZAL/BGEZAL
           if(opcode2[i-1]&0x10) { // BxxZAL
             alloc_reg(&branch_regs[i-1],i-1,31);
             dirty_reg(&branch_regs[i-1],31);
             branch_regs[i-1].is32|=1LL<<31;
+            if(opcode2[i-1]&2) { // BLTZALL/BGEZALL: not-taken path writes ra too
+              alloc_reg(&current,i-1,31);
+              dirty_reg(&current,31);
+              current.is32|=1LL<<31;
+            }
           }
           break;
         case FJUMP:

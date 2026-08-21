@@ -2398,7 +2398,7 @@ static void gentestl(struct r4300_core* r4300)
 
     jump_end_rel32(r4300);
 
-    gencp0_update_count(r4300, r4300->recomp.dst->addr-4);
+    gencp0_update_count(r4300, r4300->recomp.dst->addr + 4);
     mov_m32rel_imm32((void*)(&r4300->cp0.last_addr), r4300->recomp.dst->addr + 4);
     gencheck_interrupt(r4300, (unsigned long long) (r4300->recomp.dst + 1));
     jmp(r4300->recomp.dst->addr + 4);
@@ -2422,7 +2422,7 @@ static void gentestl_out(struct r4300_core* r4300)
 
     jump_end_rel32(r4300);
 
-    gencp0_update_count(r4300, r4300->recomp.dst->addr-4);
+    gencp0_update_count(r4300, r4300->recomp.dst->addr + 4);
     mov_m32rel_imm32((void*)(&r4300->cp0.last_addr), r4300->recomp.dst->addr + 4);
     gencheck_interrupt(r4300, (unsigned long long) (r4300->recomp.dst + 1));
     jmp(r4300->recomp.dst->addr + 4);
@@ -4212,20 +4212,33 @@ void gen_SYSCALL(struct r4300_core* r4300)
 #if defined(COUNT_INSTR)
     inc_m32rel(&instr_count[63]);
 #endif
-#ifdef INTERPRET_SYSCALL
-    gencallinterp(r4300, (unsigned long long)cached_interp_SYSCALL, 0);
-#else
-    free_registers_move_start(r4300);
-
-    mov_m32rel_imm32(&r4300_cp0_regs(&r4300->cp0)[CP0_CAUSE_REG], 8 << 2);
-    gencallinterp(r4300, (unsigned long long)dynarec_exception_general, 0);
-#endif
+    /* SYSCALL must go through the interpreter fallback with the jump flag
+     * set, like ERET.  The old native form emitted the CP0 Cause write
+     * between its own free_registers_move_start and the one inside
+     * gencallinterp; the second call runs simplify_access, which advances
+     * dst->local_addr past the Cause store.  Any jump entry into the
+     * instruction (an ERET returning to the syscall, block linking) then
+     * skips the Cause write and the exception reports whatever stale value
+     * Cause holds.  The jump flag also matters: with jump == 0 the block
+     * falls through after the exception and executes the instructions that
+     * follow the syscall before the pending jump to the vector is taken,
+     * clobbering the arguments the handler is about to read. */
+    gencallinterp(r4300, (unsigned long long)cached_interp_SYSCALL, 1);
 }
 
 /* Trap instructions */
 
 void gen_TGE(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rs);
     int rt = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rt);
 
@@ -4240,6 +4253,15 @@ void gen_TGE(struct r4300_core* r4300)
 
 void gen_TGEU(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rs);
     int rt = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rt);
 
@@ -4254,6 +4276,15 @@ void gen_TGEU(struct r4300_core* r4300)
 
 void gen_TGEI(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.i.rs);
 
     cmp_reg64_imm32(rs, (unsigned int)(int)r4300->recomp.dst->f.i.immediate);
@@ -4267,6 +4298,15 @@ void gen_TGEI(struct r4300_core* r4300)
 
 void gen_TGEIU(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.i.rs);
 
     cmp_reg64_imm32(rs, (unsigned int)(int)r4300->recomp.dst->f.i.immediate);
@@ -4280,6 +4320,15 @@ void gen_TGEIU(struct r4300_core* r4300)
 
 void gen_TLT(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rs);
     int rt = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rt);
 
@@ -4294,6 +4343,15 @@ void gen_TLT(struct r4300_core* r4300)
 
 void gen_TLTU(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rs);
     int rt = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rt);
 
@@ -4308,6 +4366,15 @@ void gen_TLTU(struct r4300_core* r4300)
 
 void gen_TLTI(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.i.rs);
 
     cmp_reg64_imm32(rs, (unsigned int)(int)r4300->recomp.dst->f.i.immediate);
@@ -4321,6 +4388,15 @@ void gen_TLTI(struct r4300_core* r4300)
 
 void gen_TLTIU(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.i.rs);
 
     cmp_reg64_imm32(rs, (unsigned int)(int)r4300->recomp.dst->f.i.immediate);
@@ -4337,6 +4413,15 @@ void gen_TEQ(struct r4300_core* r4300)
 #if defined(COUNT_INSTR)
     inc_m32rel(&instr_count[96]);
 #endif
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rs);
     int rt = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rt);
 
@@ -4351,6 +4436,15 @@ void gen_TEQ(struct r4300_core* r4300)
 
 void gen_TEQI(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.i.rs);
 
     cmp_reg64_imm32(rs, (unsigned int)(int)r4300->recomp.dst->f.i.immediate);
@@ -4364,6 +4458,15 @@ void gen_TEQI(struct r4300_core* r4300)
 
 void gen_TNE(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rs);
     int rt = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.r.rt);
 
@@ -4378,6 +4481,15 @@ void gen_TNE(struct r4300_core* r4300)
 
 void gen_TNEI(struct r4300_core* r4300)
 {
+    /* Flush before touching the register cache: the trap arm below is jumped
+     * over when the trap does not fire, but gencallinterp's flush inside it
+     * updates the compile-time cache state unconditionally.  Any dirty
+     * register writebacks emitted there would sit in the skipped arm and
+     * never execute, leaving memory stale while the compiler believes it is
+     * current.  Flushing here (the gencheck_cop1_unusable shape) means the
+     * arm's flush has nothing dirty to write back and both paths agree. */
+    free_registers_move_start(r4300);
+
     int rs = allocate_register_64(r4300, (unsigned long long *)r4300->recomp.dst->f.i.rs);
 
     cmp_reg64_imm32(rs, (unsigned int)(int)r4300->recomp.dst->f.i.immediate);
