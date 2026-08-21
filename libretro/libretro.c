@@ -1153,7 +1153,23 @@ static void preroll_sample_rate(void)
     * context_reset() instead, where it was connected before: its InitiateGFX
     * has to keep sitting right next to the RomOpen that follows it. */
    if (gfx_plugin == GFX_ANGRYLION || gfx_plugin == GFX_PARALLEL)
+   {
       plugin_connect_gfx(rdp_type_for_gfx_plugin());
+#ifdef HAVE_THR_AL
+      /* plugin_start_gfx() only issues InitiateGFX.  The core's romOpen ran
+       * back during the pre-roll, when the attached renderer was still
+       * gfx_none, and angrylion does all of its setup in romOpen: n64video_init
+       * and the angrylion_init flag that gates every one of its entry points.
+       * Without this the RDP and the VI silently do nothing and the screen
+       * stays black.  The GL renderers get the same treatment from
+       * reinit_gfx_plugin(); parallel's romOpen is a no-op. */
+      if (gfx_plugin == GFX_ANGRYLION)
+      {
+         extern int angrylionRomOpen(void);
+         angrylionRomOpen();
+      }
+#endif
+   }
 }
 
 /* Whether the pre-roll is running: the frontend's callbacks are not usable yet
