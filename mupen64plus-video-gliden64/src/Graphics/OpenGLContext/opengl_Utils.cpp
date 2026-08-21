@@ -118,7 +118,14 @@ const char* GLErrorString(GLenum errorCode)
 
 bool Utils::isGLError()
 {
-#ifdef GL_DEBUG
+	/* Not under GL_DEBUG: this is not a logging helper, callers branch on it.
+	 * CombinerProgramImpl::getBinaryForm() drops a program binary the driver
+	 * refused, glsl_ShaderStorage gates the whole shader cache on it, and
+	 * BufferManipulationObjectFactory checks framebuffer creation with it.
+	 * Compiled out, it returned false without ever calling glGetError, so a
+	 * failed glGetProgramBinary was saved as a buffer of zeros and every
+	 * cached shader came back "not a valid binary" on the next run.  The cost
+	 * is one glGetError at a handful of call sites, not per GL call. */
 	GLenum errCode;
 	const char* errString;
 
@@ -132,7 +139,6 @@ bool Utils::isGLError()
 
 		return true;
 	}
-#endif
 	return false;
 }
 
