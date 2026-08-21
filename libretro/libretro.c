@@ -3002,16 +3002,13 @@ static void glsm_exit(void)
    if (gfx_plugin == GFX_PARALLEL)
       return;
 #endif
-   /* GLideN64 must stay out of the per-frame cycle.  glsm's save/restore was
-    * written for the simple cores (glide64, gln64, rice) and is not symmetric:
-    * the unbind drops GL_ARRAY_BUFFER/GL_ELEMENT_ARRAY_BUFFER to 0 and the bind
-    * never restores them (it even clears gl_state.array_buffer).  GLideN64
-    * caches its own bindings above glsm (opengl_CachedFunctions), so it never
-    * rebinds what glsm silently dropped and ends up streaming vertices into
-    * buffer 0 -- black screen and missing textures.  Giving it the cycle to fix
-    * the CRT/KMS viewport squash cost far more than it bought. */
-   if (gfx_plugin == GFX_GLIDEN64)
-      return;
+   /* Every GL renderer gets the per-frame cycle. The list this used to filter
+    * on had grown to hold every renderer routed here except GLideN64, so it
+    * only ever excluded that one -- and excluding it is what left GLideN64
+    * drawing with whatever GL state the frontend had last set. RetroArch
+    * changes the KMS mode under a CRT setup and leaves its own viewport behind
+    * (640x240 for the 15kHz mode while the core renders 640x480); without the
+    * bind the core inherits it and the picture comes out squashed. */
    glsm_ctl(GLSM_CTL_STATE_UNBIND, NULL);
 #endif
 }
@@ -3029,9 +3026,7 @@ static void glsm_enter(void)
    if (gfx_plugin == GFX_PARALLEL)
       return;
 #endif
-   /* See glsm_exit(): GLideN64 keeps its own GL state across frames. */
-   if (gfx_plugin == GFX_GLIDEN64)
-      return;
+   /* See glsm_exit(): every GL renderer routed here gets the per-frame bind. */
    glsm_ctl(GLSM_CTL_STATE_BIND, NULL);
 #endif
 }
