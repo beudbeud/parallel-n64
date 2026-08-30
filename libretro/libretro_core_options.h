@@ -755,20 +755,6 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         "0"
     },
     {
-        CORE_NAME "-remove-vi-borders",
-        "(ParaLLEl-RDP) Remove VI borders",
-        "Remove VI borders",
-        "Removes the black borders on the left and right sides of the video. Since these pixels are never rendered on real hardware, results will vary depending on the game.",
-        NULL,
-        "parallel",
-        {
-            { "enabled", NULL },
-            { "disabled", NULL },
-            { NULL, NULL },
-        },
-        "disabled"
-    },
-    {
         CORE_NAME "-parallel-rdp-divot-filter",
         "(ParaLLEl-RDP) VI divot filter",
         "VI divot filter",
@@ -1344,7 +1330,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         CORE_NAME "-64dd-hardware",
         "64DD Hardware",
         NULL,
-        "64DD Hardware",
+        "Treat content without a recognised cartridge or disk header as a 64DD disk. Development disks and MAME/SDK dumps carry no header marker; regular cartridges and retail D64 images are identified by their header and unaffected by this setting.",
         NULL,
         NULL,
         {
@@ -1353,6 +1339,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             { NULL, NULL },
         },
         "disabled"
+    },
+    {
+        CORE_NAME "-goldeneye-tlb-hack",
+        "GoldenEye TLB Mapping Hack (Restart)",
+        NULL,
+        "Map GoldenEye's demand-paged 0x7F000000 code segment directly onto the ROM, bypassing the game's own TLB pager (ari64 dynarec only). Historically required for GoldenEye to run at all; on desktop-class hosts the accurate path now measures just as fast. Disable for hardware-faithful TLB behaviour or for modified ROMs that relocate the game segment, which the mapping would corrupt.",
+        NULL,
+        NULL,
+        {
+            { "enabled", NULL },
+            { "disabled", NULL },
+            { NULL, NULL },
+        },
+        "enabled"
     },
     {
         CORE_NAME "-allow-unaligned-dma",
@@ -1537,8 +1537,8 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         CORE_NAME "-gliden64-EnableCopyColorFromRDRAM",
         "Color buffer from RDRAM",
         NULL,
-        "(GLideN64) Enable color buffer copy from RDRAM. Required for the few titles that draw to the colour buffer with the CPU and expect the GPU to re-upload it (Donkey Kong 64 anti-aliased shadows, some Indiana Jones effects). Default off for the performance cost.",
-        "Enable color buffer copy from RDRAM. Required for the few titles that draw to the colour buffer with the CPU and expect the GPU to re-upload it. Default off for the performance cost.",
+        "(GLideN64) Always copy the color buffer from RDRAM. GLideN64 already does this by itself whenever it detects that the CPU painted the frame the VI is about to show, so this setting only adds a second, unconditional trigger for the titles that detection misses (Donkey Kong 64 anti-aliased shadows, some Indiana Jones effects). Needs Framebuffer Emulation on. Default off for the performance cost.",
+        "Always copy the color buffer from RDRAM, for the titles GLideN64's own CPU-write detection misses. Needs Framebuffer Emulation on. Default off for the performance cost.",
         "gliden64",
         {
             {"False", NULL},
@@ -1561,6 +1561,21 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             { NULL, NULL },
         },
         "Software"
+    },
+    {
+        CORE_NAME "-gliden64-GLideN64IniBehaviour",
+        "Per-game settings",
+        NULL,
+        "(GLideN64) When to apply GLideN64's built-in per-game settings. 'late' lets them override your choices below, 'early' lets your choices win, 'disabled' ignores them entirely.",
+        "When to apply GLideN64's built-in per-game settings. 'late' lets them override your choices below, 'early' lets your choices win, 'disabled' ignores them entirely.",
+        "gliden64",
+        {
+            {"late", NULL},
+            {"early", NULL},
+            {"disabled", NULL},
+            { NULL, NULL },
+        },
+        "late"
     },
     {
         CORE_NAME "-gliden64-BackgroundMode",
@@ -1664,13 +1679,16 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             {"True", NULL},
             { NULL, NULL },
         },
-#ifdef HAVE_OPENGLES
+/* GLES2 only. GLSL ES 1.00 has no gl_FragDepth without GL_EXT_frag_depth, and
+ * GLideN64 declines to emit writeDepth() there at all, so the setting cannot
+ * work on GLES2. GLSL ES 3.00 makes gl_FragDepth core, and a GLES 3.x target is
+ * no less capable than the desktop one this already defaults to True for. */
+#ifdef HAVE_OPENGLES2
         "False"
 #else
         "True"
 #endif
     },
-#if !defined(VC) && !defined(HAVE_OPENGLES)
     {
         CORE_NAME "-gliden64-EnableN64DepthCompare",
         "N64 Depth Compare",
@@ -1685,6 +1703,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
         },
         "False"
     },
+#if !defined(VC) && !defined(HAVE_OPENGLES2)
     {
         CORE_NAME "-gliden64-EnableShadersStorage",
         "Cache GPU Shaders",
@@ -1726,7 +1745,7 @@ struct retro_core_option_v2_definition option_defs_us[] = {
             {"Enabled", NULL},
             { NULL, NULL },
         },
-        "Enabled"
+        "Disabled"
     },
     {
         CORE_NAME "-gliden64-OverscanTop",

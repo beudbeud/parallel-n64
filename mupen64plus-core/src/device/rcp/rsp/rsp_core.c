@@ -477,16 +477,53 @@ void do_SP_Task(struct rsp_core* sp)
     else if (sp->mi->regs[MI_INTR_REG] & MI_INTR_SP)
     {
         cp0_update_count(sp->mi->r4300);
-        /* Leave MI_INTR_SP asserted for the CPU's handler to find.
-         * Consuming it here scheduled the event and then removed the
-         * only evidence of where it came from, so a handler that
-         * dispatches on MI_INTR_REG - as libdragon's does - saw an
-         * interrupt with no source and ignored it.  Its rspq syncpoints
-         * are signalled exactly this way, so every wait on one timed
-         * out.  The incomplete-task branch above already keeps the bit
-         * for the same reason; the completing branch has to as well.
-         * The CPU clears it by writing SP_STATUS with SP_CLR_INTR,
-         * which update_sp_status already handles. */
+        /* A completing task must deliver its break ONCE, at
+         * +sp_delay_time, with the status bits and the interrupt
+         * paired: the tail below clears TASKDONE|BROKE|HALT and the
+         * deferred event re-exposes them together with the raise.
+         * Consume the bit rsp_break set so the break does not ALSO
+         * deliver an early edge now: status-polling games acknowledge
+         * that early interrupt, find no status, and dismiss it, while
+         * schedulers that trust the interrupt count it twice --
+         * Gauntlet Legends' RSP scheduler pairs completion messages
+         * with in-flight tasks positionally, retired one task too many
+         * on the duplicate, popped an empty slot without a NULL check
+         * and parked its dispatcher in a blocking osSendMesg on a NULL
+         * queue: the scene-change deadlock. The same duplicate also
+         * deadlocked its cxd4 LLE fallback at the Midway logo, closing
+         * the GLideN64 path entirely, and produced Lego Racers' and
+         * Paperboy's random polygons (display lists reused mid-build).
+         * Only the break's own edge may be withdrawn, and only the
+         * deferred event can replay it: rsp_interrupt_event re-raises
+         * iff SP_STATUS_INTR_BREAK is set.  With INTR_BREAK clear the
+         * break raised nothing, so a pending bit here can only be a
+         * task-raised interrupt -- libdragon's rspq runs with
+         * INTR_BREAK off ("we don't need it"), raises syncpoints via
+         * SET_INTR mid-slice and then breaks idle in the same
+         * doRspCycles slice, landing exactly here.  Consuming that bit
+         * destroys the syncpoint (nothing replays it) and every
+         * rspq_syncpoint_wait times out; keep it asserted for the CPU,
+         * as the incomplete branch does.  With INTR_BREAK set, a
+         * task-raised edge in the same slice as the break coalesces
+         * into the single deferred delivery -- the CPU could not have
+         * run between them, so the two edges were never separable
+         * here.
+         *
+         * Withdrawing the edge must also withdraw its delivery
+         * machinery: the raise queued a CHECK_INT (count = now, queue
+         * front) whose handler takes the interrupt exception
+         * unconditionally.  Clearing the cause line alone leaves that
+         * node to fire as a source-less exception the moment the CPU
+         * resumes -- once per completing task.  Cancel it when nothing
+         * else is pending on the line; if another MI source is still
+         * pending, clear_rcp_interrupt has re-asserted IP2 and the
+         * node stays meaningful for that source. */
+        if (sp->regs[SP_STATUS_REG] & SP_STATUS_INTR_BREAK)
+        {
+            clear_rcp_interrupt(sp->mi, MI_INTR_SP);
+            if ((sp->mi->regs[MI_INTR_REG] & sp->mi->regs[MI_INTR_MASK_REG]) == 0)
+                remove_event(&sp->mi->r4300->cp0.q, CHECK_INT);
+        }
         add_interrupt_event(&sp->mi->r4300->cp0, SP_INT, sp_delay_time);
     }
     if ((sp->regs[SP_STATUS_REG] & (SP_STATUS_HALT | SP_STATUS_BROKE)))

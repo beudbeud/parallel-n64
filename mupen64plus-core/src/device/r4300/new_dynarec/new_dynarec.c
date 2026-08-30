@@ -1909,7 +1909,7 @@ void* ERET_new(void)
     {
         uint32_t is64 = 0;
         for(int i=0;i<32;i++)
-            is64 = (((int)(state->regs[i]>>32)^((int)state->regs[i]>>31))!=0)<<i;
+            is64 |= (((int)(state->regs[i]>>32)^((int)state->regs[i]>>31))!=0)<<i;
 
         is64 |= (((int)(state->hi>>32)^((int)state->hi>>31))!=0);
         is64 |= (((int)(state->lo>>32)^((int)state->lo>>31))!=0);
@@ -2391,10 +2391,16 @@ static void SDR_new(int pcaddr, int count)
 #error Unsupported dynarec architecture
 #endif
 
+extern int goldeneye_tlb_hack;
+
 static void tlb_speed_hacks()
 {
-  // Goldeneye hack
-  if (strncmp((char *) ROM_HEADER.Name, "GOLDENEYE",9) == 0)
+  /* Goldeneye hack: alias the demand-paged 0x7F000000 game segment
+   * directly onto the ROM so the game's TLB pager never runs. Gated
+   * by a core option: the mapping is only byte-correct for retail
+   * layouts, and bypassing the pager diverges from hardware timing
+   * and TLB state. */
+  if (goldeneye_tlb_hack && strncmp((char *) ROM_HEADER.Name, "GOLDENEYE",9) == 0)
   {
     u_int addr;
     int n;
@@ -2415,19 +2421,6 @@ static void tlb_speed_hacks()
         break;
     }
     uintptr_t rom_addr=(uintptr_t)g_dev.cart.cart_rom.rom;
-    #ifdef ROM_COPY
-    // Since memory_map is 32-bit, on 64-bit systems the rom needs to be
-    // in the lower 4G of memory to use this hack.  Copy it if necessary.
-    if((void *)g_dev.cart.cart_rom.rom>(void *)0xffffffff) {
-      munmap(ROM_COPY, 67108864);
-      if(mmap(ROM_COPY, 12582912,
-              PROT_READ | PROT_WRITE,
-              MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
-              -1, 0) <= 0) {DebugMessage(M64MSG_ERROR, "mmap() failed");}
-      memcpy(ROM_COPY,g_dev.cart.cart_rom.rom,12582912);
-      rom_addr=(uintptr_t)ROM_COPY;
-    }
-    #endif
     if(addr) {
       for(n=0x7F000;n<0x80000;n++) {
         g_dev.r4300.new_dynarec_hot_state.memory_map[n]=(((uintptr_t)(rom_addr+addr-0x7F000000))>>2)|WRITE_PROTECT;
@@ -3980,6 +3973,43 @@ static void wb_dirtys(signed char i_regmap[],uint64_t i_is32,uint64_t i_dirty)
   }
 }
 
+/* Write back the guest registers a faulting instruction still holds in host
+ * registers, whether or not they are marked dirty.
+ *
+ * clean_registers() deliberately understates wasdirty: it clears the bit of any
+ * register that will be written again further down the block, on the grounds
+ * that the intermediate value would never be read back from the register file.
+ * That reasoning holds for every ordinary exit -- the final value is written
+ * back before the block ends -- but not when an exception is taken. There the
+ * guest's handler runs on the register file, and the block is re-entered from
+ * it afterwards, so a register living only in a host register comes back with
+ * the value it had when the block was entered.
+ *
+ * Measured on All-Star Baseball 2000: a TLB refill on the LW at 0x0015118c, on
+ * the first source word of a new page, silently lost r16 and r17 -- the source
+ * and destination pointers of the copy loop around it. Both rewound to their
+ * loop-entry values, 40 bytes back, and every texture row after that was
+ * written at the wrong offset. Only the iteration counter survived, because it
+ * happened to still be marked dirty at that instruction.
+ *
+ * An exception path runs once per exception, so writing back a few registers
+ * that were already in sync costs nothing measurable. */
+static void wb_exception_dirtys(struct regstat *i_regs)
+{
+  /* Only host registers the instruction has not reassigned: where the entry map
+   * and the current map disagree the host register has been taken over for the
+   * result or for address generation, and its contents are no longer the guest
+   * register the entry map names. Those are exactly the ones ari64 is free to
+   * reuse precisely because they are not dirty, so leave them alone. */
+  uint64_t mask=i_regs->wasdirty;
+  int hr;
+  for(hr=0;hr<HOST_REGS;hr++) {
+    if(i_regs->regmap_entry[hr]==i_regs->regmap[hr])
+      mask|=UINT64_C(1)<<hr;
+  }
+  wb_dirtys(i_regs->regmap_entry,i_regs->was32,mask);
+}
+
 // Write out dirty registers that we need to reload (pair with load_needed_regs)
 // This writes the registers not written by store_regs_bt
 static void wb_needed_dirtys(signed char i_regmap[],uint64_t i_is32,uint64_t i_dirty,int addr)
@@ -4950,7 +4980,7 @@ static void do_cop1stub(int n)
     load_all_consts(regs[i].regmap_entry,regs[i].was32,regs[i].wasdirty,regs[i].wasconst,i);
     //if(i_regs!=&regs[i]) DebugMessage(M64MSG_VERBOSE, "oops: regs[i]=%x i_regs=%x",(int)&regs[i],(int)i_regs);
   }
-  wb_dirtys(i_regs->regmap_entry,i_regs->was32,i_regs->wasdirty);
+  wb_exception_dirtys(i_regs);
 
   if(get_reg(i_regs->regmap,CCREG)<0) {
     emit_loadreg(CCREG,HOST_CCREG);
@@ -5005,7 +5035,8 @@ static void emit_xkphys_fold(int i,const struct regstat *i_regs,int addr)
   no_fold2=(intptr_t)out;
   emit_jne(0);
   emit_mov(addr,HOST_TEMPREG);
-  emit_orimm(HOST_TEMPREG,0xA0000000,HOST_TEMPREG);
+  emit_orimm(HOST_TEMPREG,0x80000000,HOST_TEMPREG);
+  emit_orimm(HOST_TEMPREG,0x20000000,HOST_TEMPREG);
   emit_writeword(HOST_TEMPREG,(intptr_t)&g_dev.r4300.new_dynarec_hot_state.address);
   done=(intptr_t)out;
   emit_jmp(0);
@@ -5103,7 +5134,7 @@ static void do_readstub(int n)
   emit_jeq(0);
 
   if(!ds) load_all_consts(regs[i].regmap_entry,regs[i].was32,regs[i].wasdirty,regs[i].wasconst,i);
-  wb_dirtys(i_regs->regmap_entry,i_regs->was32,i_regs->wasdirty);
+  wb_exception_dirtys(i_regs);
 
   emit_jmp((intptr_t)&do_interrupt);
   set_jump_target(jaddr,(intptr_t)out);
@@ -5226,7 +5257,7 @@ static void inline_readstub(int type, int i, u_int addr_const, char addr, struct
     emit_jeq(0);
 
     if(!ds) load_all_consts(regs[i].regmap_entry,regs[i].was32,regs[i].wasdirty,regs[i].wasconst,i);
-    wb_dirtys(i_regs->regmap_entry,i_regs->was32,i_regs->wasdirty);
+    wb_exception_dirtys(i_regs);
 
     emit_jmp((intptr_t)&do_interrupt);
     set_jump_target(jaddr,(intptr_t)out);
@@ -5339,7 +5370,7 @@ static void do_writestub(int n)
   emit_jeq(0);
 
   if(!ds) load_all_consts(regs[i].regmap_entry,regs[i].was32,regs[i].wasdirty,regs[i].wasconst,i);
-  wb_dirtys(i_regs->regmap_entry,i_regs->was32,i_regs->wasdirty);
+  wb_exception_dirtys(i_regs);
 
   emit_jmp((intptr_t)&do_interrupt);
   set_jump_target(jaddr,(intptr_t)out);
@@ -5435,7 +5466,7 @@ static void inline_writestub(int type, int i, u_int addr_const, char addr, struc
     emit_jeq(0);
 
     if(!ds) load_all_consts(regs[i].regmap_entry,regs[i].was32,regs[i].wasdirty,regs[i].wasconst,i);
-    wb_dirtys(i_regs->regmap_entry,i_regs->was32,i_regs->wasdirty);
+    wb_exception_dirtys(i_regs);
 
     emit_jmp((intptr_t)&do_interrupt);
     set_jump_target(jaddr,(intptr_t)out);
@@ -5563,7 +5594,7 @@ static void cop0_assemble(int i,struct regstat *i_regs)
       intptr_t jaddr=(intptr_t)out;
       emit_jeq(0);
       load_all_consts(regs[i].regmap_entry,regs[i].was32,regs[i].wasdirty,regs[i].wasconst,i);
-      wb_dirtys(i_regs->regmap_entry,i_regs->was32,i_regs->wasdirty);
+      wb_exception_dirtys(i_regs);
       emit_jmp((intptr_t)&do_interrupt);
       set_jump_target(jaddr,(intptr_t)out);
     }
@@ -6473,8 +6504,8 @@ static void load_assemble(int i,struct regstat *i_regs)
     cache=get_reg(i_regs->regmap,MMREG);
     assert(map>=0);
     reglist&=~(1<<map);
-    map=do_tlb_r(addr,temp,map,cache,x,c,constmap[i][s]+offset);
-    do_tlb_r_branch(map,c,constmap[i][s]+offset,&jaddr);
+    map=do_tlb_r(addr,temp,map,cache,x,c,c?(constmap[i][s]+offset):0);
+    do_tlb_r_branch(map,c,c?(constmap[i][s]+offset):0,&jaddr);
   }
 
   if((!c||memtarget)&&!dummy) {
@@ -6650,8 +6681,8 @@ static void store_assemble(int i,struct regstat *i_regs)
     cache=get_reg(i_regs->regmap,MMREG);
     assert(map>=0);
     reglist&=~(1<<map);
-    map=do_tlb_w(addr,temp,map,cache,x,c,constmap[i][s]+offset);
-    do_tlb_w_branch(map,c,constmap[i][s]+offset,&jaddr);
+    map=do_tlb_w(addr,temp,map,cache,x,c,c?(constmap[i][s]+offset):0);
+    do_tlb_w_branch(map,c,c?(constmap[i][s]+offset):0,&jaddr);
   }
 
   if(!c||memtarget) {
@@ -6772,8 +6803,8 @@ static void storelr_assemble(int i,struct regstat *i_regs)
     int cache=get_reg(i_regs->regmap,MMREG);
     assert(map>=0);
     reglist&=~(1<<map);
-    map=do_tlb_w(addr,temp,map,cache,0,c,constmap[i][s]+offset);
-    do_tlb_w_branch(map,c,constmap[i][s]+offset,&jaddr);
+    map=do_tlb_w(addr,temp,map,cache,0,c,c?(constmap[i][s]+offset):0);
+    do_tlb_w_branch(map,c,c?(constmap[i][s]+offset):0,&jaddr);
   }
 
   if(!c||memtarget)
@@ -7091,12 +7122,12 @@ static void c1ls_assemble(int i,struct regstat *i_regs)
     assert(map>=0);
     reglist&=~(1<<map);
     if (opcode[i]==0x31||opcode[i]==0x35) { // LWC1/LDC1
-      map=do_tlb_r(addr,ar,map,cache,0,c,constmap[i][s]+offset);
-      do_tlb_r_branch(map,c,constmap[i][s]+offset,&jaddr2);
+      map=do_tlb_r(addr,ar,map,cache,0,c,c?(constmap[i][s]+offset):0);
+      do_tlb_r_branch(map,c,c?(constmap[i][s]+offset):0,&jaddr2);
     }
     else if (opcode[i]==0x39||opcode[i]==0x3D) { // SWC1/SDC1
-      map=do_tlb_w(addr,ar,map,cache,0,c,constmap[i][s]+offset);
-      do_tlb_w_branch(map,c,constmap[i][s]+offset,&jaddr2);
+      map=do_tlb_w(addr,ar,map,cache,0,c,c?(constmap[i][s]+offset):0);
+      do_tlb_w_branch(map,c,c?(constmap[i][s]+offset):0,&jaddr2);
     }
   }
 
@@ -9118,9 +9149,6 @@ void new_dynarec_cleanup(void)
   #else
     mprotect(base_addr, 1<<TARGET_SIZE_2, PROT_READ | PROT_WRITE);
   #endif
-#endif
-#ifdef ROM_COPY
-  if (munmap (ROM_COPY, 67108864) < 0) {DebugMessage(M64MSG_ERROR, "munmap() failed");}
 #endif
 }
 

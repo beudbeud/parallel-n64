@@ -131,6 +131,10 @@ uint32_t CountPerScanlineOverride = 0;
 retro_environment_t environ_cb                    = NULL;
 /* mupen64plus-next core globals consumed by the adopted main.c/rom.c */
 uint32_t CountPerOp = 0;
+/* ari64: alias GoldenEye's demand-paged segment onto the ROM (see
+ * tlb_speed_hacks). Read at startup; applied at dynarec init and on
+ * savestate load. */
+int goldeneye_tlb_hack = 1;
 uint32_t CountPerOpDenomPot = 0;
 uint32_t ForceDisableExtraMem = 0;
 uint32_t EnableThreadedRenderer = 0;
@@ -213,6 +217,8 @@ static uint8_t* cart_data           = NULL;
 static uint32_t cart_size           = 0;
 static uint8_t* disk_data           = NULL;
 static uint32_t disk_size           = 0;
+/* Set from the 64DD Hardware core option, read at content load. */
+static bool     dd_hardware         = false;
 
 static bool     emu_initialized     = false;
 static unsigned initial_boot        = true;
@@ -308,7 +314,6 @@ uint32_t AllowLargeRoms = 1;
 uint32_t LegacySm64ToolsHacks = 0;
 uint32_t RemoveFBBlackBars = 0;
 uint32_t OverrideSaveType = 0;
-uint32_t ParallelRemoveBorders = 0;
 uint32_t SdCardEmulationEnabled = 0;
 uint32_t RollbackRtcOnLoadState = 0;
 
@@ -484,12 +489,11 @@ static void core_settings_autoselect_rsp_plugin(void)
 
    rsp_plugin = RSP_HLE;
 
-   if (
-          (!strcmp((const char*)ROM_HEADER.Name, "GAUNTLET LEGENDS"))
-      )
-   {
-      rsp_plugin = RSP_CXD4;
-   }
+   /* No hardcoded RSP routing for Gauntlet Legends: rsp-hle detects its
+    * streaming microcode and serves it (angrylion), or declares itself
+    * unable and the task falls back to the LLE plugin (GLideN64). The old
+    * RSP_CXD4 override predated the streaming support and forced the one
+    * path that cannot work under either renderer. */
 
    if (!strcmp((const char*)ROM_HEADER.Name, "CONKER BFD"))
       rsp_plugin = RSP_HLE;
@@ -503,8 +507,31 @@ static void core_settings_autoselect_rsp_plugin(void)
     * below upgrades that to the parallel RSP when available. */
    {
       const uint8_t* cart = (const uint8_t*)mem_base_u32(g_mem_base, MM_CART_ROM);
-      if (cart && g_rom_size >= 0x1000 && !cic_ipl3_known(cart + 0x40))
-         rsp_plugin = RSP_CXD4;
+      if (cart && g_rom_size >= 0x1000)
+      {
+         /* Autoselect runs from emu_step_initialize(), which is before
+          * main_run() byte-swaps the cartridge into host word order, so
+          * mem_base still holds the file's own order here.  cic_ipl3_known
+          * reads native uint32, and on a little-endian host that yields
+          * transposed words summing to a value no retail CIC matches: every
+          * cartridge looked like homebrew and went to the LLE core.  Sum a
+          * corrected copy instead of the live buffer. */
+         uint32_t ipl3[0xfc0/4];
+         memcpy(ipl3, cart + 0x40, sizeof(ipl3));
+#if !defined(MSB_FIRST)
+         if (!g_RomWordsLittleEndian)
+         {
+            size_t i;
+            for (i = 0; i < sizeof(ipl3)/sizeof(ipl3[0]); ++i)
+               ipl3[i] = ((ipl3[i] & UINT32_C(0x000000ff)) << 24)
+                       | ((ipl3[i] & UINT32_C(0x0000ff00)) <<  8)
+                       | ((ipl3[i] & UINT32_C(0x00ff0000)) >>  8)
+                       | ((ipl3[i] & UINT32_C(0xff000000)) >> 24);
+         }
+#endif
+         if (!cic_ipl3_known(ipl3))
+            rsp_plugin = RSP_CXD4;
+      }
    }
 
    /* Auto mode only: with Vulkan up the best default is the parallel RSP.
@@ -648,7 +675,35 @@ static void setup_variables(void)
 
 bool is_cartridge_rom(const uint8_t* data)
 {
-   return (data != NULL && *((uint32_t *)data) != 0x16D348E8 && *((uint32_t *)data) != 0x56EE6322);
+   uint32_t magic;
+
+   if (data == NULL)
+      return false;
+
+   magic = *((uint32_t *)data);
+
+   /* A recognised D64 region marker (JP, US) is a disk regardless of any
+    * option. */
+   if (magic == 0x16D348E8 || magic == 0x56EE6322)
+      return false;
+
+   /* A recognised cartridge header (z64, v64 and n64 byte orders) is a
+    * cartridge regardless of any option: the 64DD Hardware option must never
+    * reroute positively identified content, or enabling it would send every
+    * cartridge game to the disk drive. */
+   if (magic == 0x40123780 || magic == 0x12408037 || magic == 0x80371240)
+      return true;
+
+   /* Neither marker matched. With the 64DD Hardware option on, unidentified
+    * content is a disk: a development disk carries DD_REGION_DV, four zero
+    * bytes, and a MAME or SDK dump is identified by its size rather than by
+    * anything at offset zero. When a disk is already mounted through the
+    * cartridge+disk subsystem, the slot being classified here is the
+    * cartridge by construction, so the cartridge default stands there. */
+   if (dd_hardware && disk_data == NULL)
+      return false;
+
+   return true;
 }
 
 
@@ -1593,7 +1648,11 @@ void update_variables(bool startup)
       struct retro_variable cpuvar;
       cpuvar.key = "parallel-n64-cpucore";
       cpuvar.value = NULL;
+#if !defined(NEW_DYNAREC) && defined(HAVE_DYNAREC_HACKTARUX)
+      r4300_jit_backend = 1; /* R4300_JIT_HACKTARUX: ari64 is not compiled in */
+#else
       r4300_jit_backend = 0; /* default: ari64 */
+#endif
       if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &cpuvar) && cpuvar.value)
       {
          if (!strcmp(cpuvar.value, "pure_interpreter"))   r4300_emumode = 0;
@@ -1622,17 +1681,38 @@ void update_variables(bool startup)
 
   if (startup)
   {
+	  struct retro_variable expvar;
+	  struct retro_variable ddvar;
+
 	  /* Expansion Pak. main.c derives rdram_size from ForceDisableExtraMem, but
 	   * nothing ever assigned it, so the option was inert and every game got the
 	   * full 8MB whatever the user picked -- titles that require the Pak booted
 	   * with it "off", and titles meant to be tested without it could not be.
 	   * Startup only, since rdram_size is fixed when the device is built. */
-	  struct retro_variable expvar;
 	  expvar.key = "parallel-n64-disable_expmem";
 	  expvar.value = NULL;
 	  ForceDisableExtraMem = 0;
 	  if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &expvar) && expvar.value)
 		  ForceDisableExtraMem = !strcmp(expvar.value, "disabled") ? 1 : 0;
+
+	  /* 64DD Hardware. Decides how content that carries neither a cartridge
+	   * header nor a D64 region marker is classified: with the option on, such
+	   * content goes to the disk drive. Positively identified content is
+	   * routed by its header either way. Startup only, before retro_load_game
+	   * classifies anything. */
+	  ddvar.key = "parallel-n64-64dd-hardware";
+	  ddvar.value = NULL;
+	  dd_hardware = false;
+	  if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &ddvar) && ddvar.value)
+		  dd_hardware = !strcmp(ddvar.value, "enabled");
+
+	  /* Startup only: the value is consumed when the ari64 dynarec builds
+	   * its memory map, and a mid-game toggle would leave stale mappings. */
+	  ddvar.key = "parallel-n64-goldeneye-tlb-hack";
+	  ddvar.value = NULL;
+	  goldeneye_tlb_hack = 1;
+	  if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &ddvar) && ddvar.value)
+		  goldeneye_tlb_hack = !strcmp(ddvar.value, "enabled");
   }
 
 #if defined(HAVE_PARALLEL)
@@ -1656,13 +1736,6 @@ void update_variables(bool startup)
    else
 	   parallel_set_overscan_crop(0);
    
-   var.key = "parallel-n64-remove-vi-borders";
-   var.value = NULL;
-   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
-      ParallelRemoveBorders = !strcmp(var.value, "enabled");
-   else
-      ParallelRemoveBorders = 0;
-
    var.key = "parallel-n64-parallel-rdp-divot-filter";
    var.value = NULL;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
@@ -2335,12 +2408,17 @@ void update_variables(bool startup)
       EnableFXAA = atoi(var.value);
    }
 
+   /* Declared in libretro_core_options.h under the same guard. Querying it
+    * unconditionally makes the frontend log "Invalid value" on every launch of
+    * a GLES2 build, for an option the core never offered. */
+#ifndef HAVE_OPENGLES2
    var.key = CORE_NAME "-gliden64-MultiSampling";
    var.value = NULL;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
       MultiSampling = atoi(var.value);
    }
+#endif
 
    var.key = CORE_NAME "-gliden64-EnableLODEmulation";
    var.value = NULL;
@@ -2361,7 +2439,7 @@ void update_variables(bool startup)
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
       if (!strcmp(var.value, "Compatible"))
-         EnableN64DepthCompare = 1; // dcCompatible
+         EnableN64DepthCompare = 2; // dcCompatible
       else if (!strcmp(var.value, "True"))
          EnableN64DepthCompare = 1; // dcFast
       else
@@ -2549,12 +2627,14 @@ void update_variables(bool startup)
       EnableFragmentDepthWrite = !strcmp(var.value, "False") ? 0 : 1;
    }
 
-   var.key = CORE_NAME "-gliden64-gliden64-EnableShadersStorage";
+#if !defined(VC) && !defined(HAVE_OPENGLES2)
+   var.key = CORE_NAME "-gliden64-EnableShadersStorage";
    var.value = NULL;
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
       EnableShadersStorage = !strcmp(var.value, "False") ? 0 : 1;
    }
+#endif
 
    var.key = CORE_NAME "-gliden64-EnableTextureCache";
    var.value = NULL;
@@ -2575,6 +2655,41 @@ void update_variables(bool startup)
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
    {
       EnableCopyAuxToRDRAM = !strcmp(var.value, "False") ? 0 : 1;
+   }
+
+   var.key = CORE_NAME "-gliden64-EnableOverscan";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      EnableOverscan = !strcmp(var.value, "Enabled") ? 1 : 0;
+   }
+
+   var.key = CORE_NAME "-gliden64-OverscanTop";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      OverscanTop = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-gliden64-OverscanLeft";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      OverscanLeft = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-gliden64-OverscanRight";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      OverscanRight = atoi(var.value);
+   }
+
+   var.key = CORE_NAME "-gliden64-OverscanBottom";
+   var.value = NULL;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+   {
+      OverscanBottom = atoi(var.value);
    }
 
    var.key = CORE_NAME "-gliden64-GLideN64IniBehaviour";

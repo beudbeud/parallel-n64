@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <vector>
 
 #include "../Config.h"
 #include "../GLideN64.h"
@@ -77,10 +78,16 @@ void LoadCustomSettings(bool internal)
 	bool found = false;
 	char buffer[256];
 	char* line;
-	FILE* fPtr;
+	FILE* fPtr = NULL;
+	char* iniEnd = NULL;
+	/* Keep the copy alive for the whole scan: ini_parse_line writes into it
+	 * and the parsed names and values point into it. */
+	std::vector<char> iniCopy;
 	std::transform(myString.begin(), myString.end(), myString.begin(), ::toupper);
 	if (internal) {
-		line = strtok(customini, "\n");
+		iniCopy.assign(customini, customini + strlen(customini) + 1);
+		line = iniCopy.data();
+		iniEnd = line + strlen(line);
 	} else {
 		const char *pathname = ConfigGetSharedDataFilepath("GLideN64.custom.ini");
 		if (pathname == NULL || (fPtr = fopen(pathname, "rb")) == NULL)
@@ -93,7 +100,8 @@ void LoadCustomSettings(bool internal)
 				break;
 			else
 				line = buffer;
-		}
+		} else if (line >= iniEnd)
+			break;
 		ini_line l = ini_parse_line(&line);
 		switch (l.type)
 		{
@@ -103,6 +111,7 @@ void LoadCustomSettings(bool internal)
 					found = true;
 				else
 					found = false;
+				break;
 			}
 			case INI_PROPERTY:
 			{
@@ -153,12 +162,10 @@ void LoadCustomSettings(bool internal)
 				}
 			}
 		}
-		if (internal) {
-			line = strtok(NULL, "\n");
-			if (line == NULL)
-				break;
-		}
 	}
+
+	if (fPtr != NULL)
+		fclose(fPtr);
 }
 
 extern "C" void Config_LoadConfig()
